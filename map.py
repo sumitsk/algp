@@ -59,12 +59,12 @@ class Map(object):
         plt.title('Field Map')
         plt.imshow(1-self.oc_grid, cmap='gray', interpolation='none', aspect='equal')
         if gp_pose is not None:
-            map_pos = self.gp_map_to_map_map(gp_pose)
+            map_pos = self.gp_pose_to_map_pose(gp_pose)
             plt.scatter(map_pos[1], map_pos[0])
 
         plt.show()
 
-    def gp_map_to_map_map(self, gp_pose):
+    def gp_pose_to_map_pose(self, gp_pose):
         if isinstance(gp_pose, tuple):
             poses = np.array(gp_pose)
         else:
@@ -75,7 +75,7 @@ class Map(object):
         a = poses[:, 0] // self.stack_len
         b = poses[:, 0] % self.stack_len
         map_poses[:, 0] = a * (self.stack_len + self.row_pass_width) + b
-        return map_poses
+        return map_poses.astype(int)
 
     def map_pose_to_gp_pose(self, map_pose):
         assert isinstance(map_pose, tuple), 'Map pose must be a tuple!'
@@ -89,12 +89,17 @@ class Map(object):
         return x, y
 
     def get_all_gp_distances(self, pos):
-        ocgrid_pos = self.gp_map_to_map_map(pos)
-        # print(pos, ocgrid_pos)
+        ocgrid_pos = self.gp_pose_to_map_pose(pos)
         gvals = run_bfs(self.oc_grid, ocgrid_pos)
         temp = gvals[:,0:gvals.shape[1]:2]
         temp = np.delete(temp, self.row_pass_indices, axis=0)
         return temp
+
+    @staticmethod
+    def get_distances(pose, map_poses):
+        pose_ = np.array(pose).reshape(-1, 2)
+        map_poses_ = np.array(map_poses).reshape(-1, 2)
+        return np.abs(pose_ - map_poses_).sum(axis=-1)
 
 
 class OpenList(object):

@@ -6,6 +6,7 @@ from sklearn import gaussian_process
 from sklearn.gaussian_process.kernels import RBF
 from utils import conditional_entropy
 
+
 def get_measurement(indices, noise_std, Y):
     y = Y[indices] + np.random.normal(0, noise_std, size=len(indices))
     return y
@@ -28,6 +29,61 @@ def entropy(y, A, model, noise_std):
     ent2 = conditional_entropy(y, model)
 
     return ent2
+
+# originally in env.py file
+# @deprecated
+# def select(self, map_pose, max_distance):
+#     # NOTE: this is a test I ran to validate the computation of covariance matrix via in-built function and
+#     # via actual formula (first principle lets say), see result below
+#
+#     sensor_unvisited = np.where(self.sensor_visited.flatten() == 0)[0]
+#     # sensor_visited = np.where(self.sensor_visited.flatten() == 1)[0]
+#     sensor_Y = self.env.X[sensor_unvisited, :]
+#     sensor_A = self.sensor_x
+#
+#     sensor_KYA = self.sensor_model.kernel_(sensor_Y, sensor_A)
+#     sensor_KAA = self.sensor_model.kernel_(sensor_A, sensor_A)
+#     sensor_KYY = self.sensor_model.kernel_(sensor_Y, sensor_Y)
+#
+#     # adding sensor_noise to the diagonal elements of KAA satisfies eq2
+#     # Possible bug: sometimes off-diagonal elements are not close by
+#     sensor_KAA += self.sensor_noise * np.eye(sensor_KAA.shape[0])
+#
+#     camera_unvisited = np.where(self.camera_visited.flatten() == 0)[0]
+#     # camera_visited = np.where(self.camera_visited.flatten() == 1)[0]
+#     camera_Y = self.env.X[camera_unvisited, :]
+#     camera_A = self.camera_x
+#
+#     camera_KYA = self.sensor_model.kernel_(camera_Y, camera_A)
+#     camera_KAA = self.sensor_model.kernel_(camera_A, camera_A)
+#     camera_KYY = self.sensor_model.kernel_(camera_Y, camera_Y)
+#
+#     # Method1: select location which leads to maximum reduction in entropy
+#     mu1, std = self.sensor_model.predict(sensor_Y, return_std=True)
+#     mu2, sigma = self.sensor_model.predict(sensor_Y, return_cov=True)
+#
+#     # verify eq(2) for a vector of inputs
+#     # mat1 = sensor_KYY - np.dot(np.dot(sensor_KYA, np.linalg.inv(sensor_KAA)), sensor_KYA.T)
+#
+#     # RESULT: mat1 is almost always equal to sigma. Sometimes off-diagonal terms are quite off
+#
+#     # err = np.abs(mat1 - sigma).max()
+#     # print(err)
+#     # if err > .01:
+#     #     ipdb.set_trace()
+
+# @deprecated
+# def nearby_locations(self, pose, max_distance):
+#     # returns all locations which are less than max distance apart from the current pose
+#     # run a BFS search and find all unvisited locations {O(max_distance)}
+#
+#     locations = self.env.map.get_nearby_locations(pose, max_distance)
+#
+#     # remove those which have already been sensed
+#     ind = np.ravel_multi_index(locations.T, self.sensor_visited.shape)
+#     remove_indices = np.where(self.sensor_visited.flatten()[ind] == 1)[0]
+#     locations = np.delete(locations, remove_indices, axis=0)
+#     return locations
 
 
 if __name__ == '__main__':

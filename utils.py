@@ -50,7 +50,7 @@ def conditional_entropy(x, model):
     return ent
 
 
-def mutual_information(x, model, noise_std=.01):
+def mutual_information(x, model):
     """
     compute mutual information between set X and training set of GP model
     :param x: test locations
@@ -61,7 +61,7 @@ def mutual_information(x, model, noise_std=.01):
     dim = model.X_train_.shape[-1]
     x_ = x.reshape(-1, dim)
     # todo: should noise be added too ?
-    cov = model.kernel_(x_, x_) + noise_std**2 * np.eye(x_.shape[0])
+    cov = model.kernel_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
     d = cov.shape[0]
     ent = d*CONST + .5*np.log(np.linalg.det(cov))
     cond_ent = conditional_entropy(x, model)
@@ -69,15 +69,21 @@ def mutual_information(x, model, noise_std=.01):
     return mi
 
 
-# @deprecated
-# def my_conditional_entropy(x, model, noise_std=.01):
-#     dim = model.X_train_.shape[-1]
-#     x_ = x.reshape(-1, dim)
-#     kernel = model.kernel_
-#     A = model.X_train_
-#     sigma_AA = kernel(A, A) + noise_std**2 * np.eye(A.shape[0])
-#     sigma_xA = kernel(x_, A)
-#     cov = kernel(x_, x_) - np.dot(np.dot(sigma_xA, np.linalg.inv(sigma_AA)), sigma_xA.T)
-#     d = cov.shape[0]
-#     ent = d*CONST + .5*np.log(np.linalg.det(cov))
-#     return ent
+def mi_change(x, model, A, A_bar):
+    e1 = my_conditional_entropy(x, A, model)
+    e2 = my_conditional_entropy(x, A_bar, model)
+    info = e1 - e2
+    return info
+
+
+def my_conditional_entropy(x, A, model):
+    kernel = model.kernel
+    alpha = model.alpha
+    dim = model.X_train_.shape[-1]
+    x_ = x.reshape(-1, dim)
+    sigma_AA = kernel(A, A) + alpha * np.eye(A.shape[0])
+    sigma_xA = kernel(x_, A)
+    cov = kernel(x_, x_) - np.dot(np.dot(sigma_xA, np.linalg.inv(sigma_AA)), sigma_xA.T)
+    d = cov.shape[0]
+    ent = d*CONST + .5*np.log(np.linalg.det(cov))
+    return ent

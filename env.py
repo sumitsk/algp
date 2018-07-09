@@ -6,7 +6,7 @@ from copy import deepcopy
 import matplotlib.pyplot as plt 
 
 from map import Map
-from utils import generate_gaussian_data, conditional_entropy, mutual_information
+from utils import generate_gaussian_data, conditional_entropy, mutual_information, mi_change
 
 
 class Agent(object):
@@ -37,6 +37,12 @@ class Agent(object):
         # initial pose
         self.map_pose = (0, 0)
         self.search_radius = 40
+        all_strategies = ['sensor_maximum_entropy',
+                          'camera_maximum_entropy',
+                          'sensor_maximum_mi_change',
+                          'camera_maximum_mi_change',
+                          'informative']
+        self.strategy = all_strategies[2]
 
         # sensor measurements have been taken from locations set to 1
         self.sensor_visited = np.zeros(env.shape)
@@ -117,15 +123,26 @@ class Agent(object):
         else:
             raise NotImplementedError
 
-    def run(self, render=False):
+    def run(self, render=False, iterations=50):
         if render:
             plt.ion()
 
-        for i in range(50):
-            print('Run ', i+1)
-            nodes = self.bfs_search(self.map_pose, self.search_radius)
-            best_node = self.select_next_node(nodes)
-            self.step(best_node, render)
+        if self.strategy == 'sensor_maximum_entropy':
+            self.step_max_entropy('sensor', render, iterations)
+        elif self.strategy == 'camera_maximum_entropy':
+            self.step_max_entropy('camera', render, iterations)
+        elif self.strategy == 'sensor_maximum_mi_change':
+            self.step_max_mi_change('sensor', render, iterations)
+        elif self.strategy == 'camera_maximum_mi_change':
+            self.step_max_mi_change('camera', render, iterations)
+        elif self.strategy == 'informative':
+            self.step_informative(render, iterations)
+        else:
+            raise NotImplementedError
+
+        # nodes = self.bfs_search(self.map_pose, self.search_radius)
+        # best_node = self.select_next_node(nodes)
+        # self.step(best_node, render)
 
     def step(self, node, render=False):
         # add camera samples
@@ -152,69 +169,87 @@ class Agent(object):
         print(self.path)
 
     def render(self):
-        # plt.figure(0)
+        plt.figure(0)
         plot = self.env.map.oc_grid
 
         # highlight camera measurement
-        plot[self.path[:, 0], self.path[:, 1]] = 0.5
+        if self.path.shape[0] > 0:
+            plot[self.path[:, 0], self.path[:, 1]] = 0.5
         plot[self.map_pose] = 0.7
         plt.imshow(plot)
         plt.pause(.1)
-        # plt.show()
 
-    # @deprecated
-    # def select(self, map_pose, max_distance):
-    #     # NOTE: this is a test I ran to validate the computation of covariance matrix via in-built function and
-    #     # via actual formula (first principle lets say), see result below
-    #
-    #     sensor_unvisited = np.where(self.sensor_visited.flatten() == 0)[0]
-    #     # sensor_visited = np.where(self.sensor_visited.flatten() == 1)[0]
-    #     sensor_Y = self.env.X[sensor_unvisited, :]
-    #     sensor_A = self.sensor_x
-    #
-    #     sensor_KYA = self.sensor_model.kernel_(sensor_Y, sensor_A)
-    #     sensor_KAA = self.sensor_model.kernel_(sensor_A, sensor_A)
-    #     sensor_KYY = self.sensor_model.kernel_(sensor_Y, sensor_Y)
-    #
-    #     # adding sensor_noise to the diagonal elements of KAA satisfies eq2
-    #     # Possible bug: sometimes off-diagonal elements are not close by
-    #     sensor_KAA += self.sensor_noise * np.eye(sensor_KAA.shape[0])
-    #
-    #     camera_unvisited = np.where(self.camera_visited.flatten() == 0)[0]
-    #     # camera_visited = np.where(self.camera_visited.flatten() == 1)[0]
-    #     camera_Y = self.env.X[camera_unvisited, :]
-    #     camera_A = self.camera_x
-    #
-    #     camera_KYA = self.sensor_model.kernel_(camera_Y, camera_A)
-    #     camera_KAA = self.sensor_model.kernel_(camera_A, camera_A)
-    #     camera_KYY = self.sensor_model.kernel_(camera_Y, camera_Y)
-    #
-    #     # Method1: select location which leads to maximum reduction in entropy
-    #     mu1, std = self.sensor_model.predict(sensor_Y, return_std=True)
-    #     mu2, sigma = self.sensor_model.predict(sensor_Y, return_cov=True)
-    #
-    #     # verify eq(2) for a vector of inputs
-    #     # mat1 = sensor_KYY - np.dot(np.dot(sensor_KYA, np.linalg.inv(sensor_KAA)), sensor_KYA.T)
-    #
-    #     # RESULT: mat1 is almost always equal to sigma. Sometimes off-diagonal terms are quite off
-    #
-    #     # err = np.abs(mat1 - sigma).max()
-    #     # print(err)
-    #     # if err > .01:
-    #     #     ipdb.set_trace()
+    def maximum_entropy(self, source):
+        if source == 'sensor':
+            model = self.sensor_model
+        elif source == 'camera':
+            model = self.camera_model
+        else:
+            raise NotImplementedError
+        mu, std = model.predict(self.env.X, return_std=True)
+        gp_indices = np.where(std == std.max())[0]
+        map_poses = self._gp_index_to_map_pose(gp_indices)
+        distances = self.env.map.get_distances(self.map_pose, map_poses)
+        idx = np.argmin(distances)
+        return gp_indices[idx], map_poses[idx]
 
-    # @deprecated
-    # def nearby_locations(self, pose, max_distance):
-    #     # returns all locations which are less than max distance apart from the current pose
-    #     # run a BFS search and find all unvisited locations {O(max_distance)}
-    #
-    #     locations = self.env.map.get_nearby_locations(pose, max_distance)
-    #
-    #     # remove those which have already been sensed
-    #     ind = np.ravel_multi_index(locations.T, self.sensor_visited.shape)
-    #     remove_indices = np.where(self.sensor_visited.flatten()[ind] == 1)[0]
-    #     locations = np.delete(locations, remove_indices, axis=0)
-    #     return locations
+    def step_max_entropy(self, source, render, iterations):
+        for i in range(iterations):
+            next_gp_index, next_map_pose = self.maximum_entropy(source)
+            self.add_samples(source, [next_gp_index])
+            self.update_model(source)
+            self._update_path(next_map_pose)
+            self.map_pose = tuple(next_map_pose)
+            if render:
+                self.render()
+            ipdb.set_trace()
+
+    def _update_path(self, next_map_pose):
+        pass
+
+    def step_max_mi_change(self, source, render, iterations):
+        for i in range(iterations):
+            next_gp_index, next_map_pose = self.maximum_mi_change(source)
+            self.add_samples(source, [next_gp_index])
+            self.update_model(source)
+            self._update_path(next_map_pose)
+            self.map_pose = tuple(next_map_pose)
+            if render:
+                self.render()
+            ipdb.set_trace()
+
+    def step_informative(self, render, iterations):
+        pass
+
+    def maximum_mi_change(self, source):
+        # computing change in mutual information is slow right now
+        # Use entropy criteria for now
+        if source == 'sensor':
+            model = self.sensor_model
+            mask = np.copy(self.sensor_visited.flatten())
+        elif source == 'camera':
+            model = self.camera_model
+            mask = np.copy(self.camera_visited.flatten())
+        else:
+            raise NotImplementedError
+        a_ind = np.where(mask == 1)[0]
+        A = self.env.X[a_ind, :]
+        a_bar_ind = np.where(mask == 0)[0]
+        mi = np.zeros(self.env.X.shape[0])
+        # ipdb.set_trace()
+        for i, x in enumerate(self.env.X):
+            if mask[i] == 0:
+                a_bar_ind = np.delete(a_bar_ind, np.where(a_bar_ind == i)[0][0])
+            A_bar = self.env.X[a_bar_ind, :]
+            info = mi_change(x, model, A, A_bar)
+            mi[i] = info
+
+        gp_indices = np.where(mi == mi.max())[0]
+        map_poses = self._gp_index_to_map_pose(gp_indices)
+        distances = self.env.map.get_distances(self.map_pose, map_poses)
+        idx = np.argmin(distances)
+        # ipdb.set_trace()
+        return gp_indices[idx], map_poses[idx]
 
     def bfs_search(self, map_pose, max_distance):
         node = Node(map_pose, 0, 0, [])
@@ -229,7 +264,6 @@ class Agent(object):
 
         while len(open_nodes) != 0:
             node = open_nodes.pop(0)
-            # print(node.map_pose)
             gp_index = self._map_pose_to_gp_index(node.map_pose)
 
             # don't compute utility here
@@ -331,10 +365,6 @@ class Agent(object):
         return map_pose
                     
     def _map_pose_to_gp_index(self, map_pose):
-        # if isinstance(map_pose, tuple):
-        #     tmp = np.array(map_pose)
-        # else:
-        #     tmp = map_pose
         assert isinstance(map_pose, tuple), 'Map pose should be a tuple'
         gp_pose = self.env.map.map_pose_to_gp_pose(map_pose)
         if gp_pose is None:
@@ -346,7 +376,6 @@ class Agent(object):
             tmp = np.array(gp_pose)
         else:
             tmp = np.copy(gp_pose)
-        # print(gp_pose, tmp)
         indices = np.ravel_multi_index(tmp.reshape(-1, 2).T, self.env.shape)
         if isinstance(gp_pose, tuple):
             return indices[0]
@@ -355,92 +384,23 @@ class Agent(object):
     def _gp_index_to_gp_pose(self, gp_index):
         return np.vstack(np.unravel_index(gp_index, self.env.shape)).T
 
-    # @deprecated
-    # def _get_utility(self, source, gp_index, parents_index):
-    #     # TODO: this may be inaccurate
-    #     # return 0 for free cell (which doesn't have any samples)
-    #     if gp_index is None:
-    #         return 0
-    #
-    #     if source == 'camera':
-    #         model = self.camera_model
-    #         kernel = self.camera_model.kernel_
-    #         visited = self.camera_visited
-    #         noise = self.camera_noise
-    #         utility = self.camera_utility_type
-    #
-    #     elif source == 'sensor':
-    #         model = self.sensor_model
-    #         kernel = self.sensor_model.kernel_
-    #         visited = self.sensor_visited
-    #         noise = self.sensor_noise
-    #         utility = self.sensor_utility_type
-    #     else:
-    #         raise NotImplementedError
-    #
-    #     temp = np.copy(visited.flatten())
-    #     # TODO: is this the right thing to do? (possibly a bug: entropy is negative at times)
-    #     # no information if already visited
-    #     if temp[gp_index] == 1:
-    #         return 0
-    #
-    #     # add all parent_nodes in visited list
-    #     if len(parents_index) > 0:
-    #         temp[parents_index] = 1
-    #
-    #     # to exclude node from both lists
-    #     temp[gp_index] = 2
-    #     visited_indices = np.where(temp == 1)[0]
-    #     unvisited_indices = np.where(temp == 0)[0]
-    #
-    #     y = self.env.X[gp_index, :]
-    #     A = self.env.X[visited_indices, :]
-    #     A_bar = self.env.X[unvisited_indices, :]
-    #
-    #     e1 = entropy(y, A, kernel, noise)
-    #     ipdb.set_trace()
-    #     if utility == 'entropy':
-    #         return e1
-    #     elif utility == 'information_gain':
-    #         e2 = entropy(y, A_bar, kernel, noise)
-    #         info = e1 - e2
-    #         return info
-    #     else:
-    #         raise NotImplementedError
-
     def _get_utility(self, source, indices):
         if source == 'camera':
             model = self.camera_model
             util = self.camera_utility_type
-            noise_std = self.camera_noise
         elif source == 'sensor':
             model = self.sensor_model
             util = self.sensor_utility_type
-            noise_std = self.sensor_noise
         else:
             raise NotImplementedError
 
         x = self.env.X[indices, :]
         if util == 'mutual information':
-            return mutual_information(x, model, noise_std)
+            return mutual_information(x, model)
         elif util == 'entropy':
             return conditional_entropy(x, model)
         else:
             raise NotImplementedError
-
-
-def entropy(y, A, kernel, noise):
-    y = y.reshape(-1, 2)
-    A = A.reshape(-1, 2)
-    sigma_AA = kernel(A, A) + noise * np.eye(A.shape[0])
-    sigma_yA = kernel(y, A)
-
-    var = kernel(y, y) - np.dot(np.dot(sigma_yA, np.linalg.inv(sigma_AA)), sigma_yA.T)
-    var = var[0, 0]
-    entropy = .5*np.log(2*np.pi*np.exp(1)*var)
-
-    # mu, sig = model.predict()
-    return entropy
 
 
 def isvalid(node, shape):
@@ -537,6 +497,6 @@ class FieldEnv(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=10, num_cols=10)
+    env = FieldEnv(num_rows=20, num_cols=20)
     agent = Agent(env, sensor_model_type='GP', camera_model_type='GP')
     agent.run(render=True)
