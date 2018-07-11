@@ -33,55 +33,67 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, t
 
     return grid, y
 
+# @deprecated
+# def conditional_entropy(x, model):
+#     """
+#     compute entropy of set x conditioned on the training set of GP model
+#     :param x: test locations
+#     :param model: GP model
+#     :return: H(x| model.X_train_)
+#     """
+#
+#     dim = model.X_train_.shape[-1]
+#     x_ = x.reshape(-1, dim)
+#     mu, cov = model.predict(x_, return_cov=True)
+#     d = cov.shape[0]
+#     ent = d*CONST + .5*np.log(np.linalg.det(cov))
+#     return ent
 
-def conditional_entropy(x, model):
+# @deprecated
+# def mutual_information(x, model):
+#     """
+#     compute mutual information between set X and training set of GP model
+#     :param x: test locations
+#     :param model: GP model
+#     :return: MI(x, model.X_train_)
+#     """
+#
+#     dim = model.X_train_.shape[-1]
+#     x_ = x.reshape(-1, dim)
+#     # todo: should noise be added too ?
+#     cov = model.kernel_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
+#     d = cov.shape[0]
+#     ent = d*CONST + .5*np.log(np.linalg.det(cov))
+#     cond_ent = conditional_entropy(x, model)
+#     mi = ent - cond_ent
+#     return mi
+
+
+def mi_change(x, A, A_bar, kernel, noise_var):
     """
-    compute entropy of set x conditioned on the training set of GP model
-    :param x: test locations
-    :param model: GP model
-    :return: H(x| model.X_train_)
+    :param x:
+    :param A:
+    :param A_bar:
+    :param kernel: Kernel
+    :param noise_var: measurement noise variance
+    :return: H(x|A) - H(x|A_bar)
     """
-
-    dim = model.X_train_.shape[-1]
-    x_ = x.reshape(-1, dim)
-    mu, cov = model.predict(x_, return_cov=True)
-    d = cov.shape[0]
-    ent = d*CONST + .5*np.log(np.linalg.det(cov))
-    return ent
-
-
-def mutual_information(x, model):
-    """
-    compute mutual information between set X and training set of GP model
-    :param x: test locations
-    :param model: GP model
-    :return: MI(x, model.X_train_)
-    """
-
-    dim = model.X_train_.shape[-1]
-    x_ = x.reshape(-1, dim)
-    # todo: should noise be added too ?
-    cov = model.kernel_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
-    d = cov.shape[0]
-    ent = d*CONST + .5*np.log(np.linalg.det(cov))
-    cond_ent = conditional_entropy(x, model)
-    mi = ent - cond_ent
-    return mi
-
-
-def mi_change(x, model, A, A_bar):
-    e1 = my_conditional_entropy(x, A, model)
-    e2 = my_conditional_entropy(x, A_bar, model)
+    e1 = conditional_entropy(x, A, kernel, noise_var)
+    e2 = conditional_entropy(x, A_bar, kernel, noise_var)
     info = e1 - e2
     return info
 
 
-def my_conditional_entropy(x, A, model):
-    kernel = model.kernel
-    alpha = model.alpha
-    dim = model.X_train_.shape[-1]
-    x_ = x.reshape(-1, dim)
-    sigma_AA = kernel(A, A) + alpha * np.eye(A.shape[0])
+def conditional_entropy(x, A, kernel, noise_var):
+    """
+    :param x:
+    :param A:
+    :param kernel: Kernel
+    :param noise_var: variance due to measurement noise
+    :return: H(x|A)
+    """
+    x_ = x.reshape(-1, A.shape[-1])
+    sigma_AA = kernel(A, A) + noise_var * np.eye(A.shape[0])
     sigma_xA = kernel(x_, A)
     cov = kernel(x_, x_) - np.dot(np.dot(sigma_xA, np.linalg.inv(sigma_AA)), sigma_xA.T)
     d = cov.shape[0]
