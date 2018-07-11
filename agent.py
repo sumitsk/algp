@@ -39,9 +39,6 @@ class Agent(object):
         self.sensor_y = np.empty((0,))
         self.camera_x = np.empty((0, feature_dim))
         self.camera_y = np.empty((0,))
-        # initial pose
-        self.map_pose = (0, 0)
-        self.search_radius = 10
 
         # sensor measurements have been taken from locations set to 1
         self.sensor_visited = np.zeros(env.shape)
@@ -49,7 +46,11 @@ class Agent(object):
         self.camera_visited = np.zeros(env.shape)
 
         self._pre_train(num_samples=20)
-        self.path = np.empty((0, 2))
+        # initial pose
+        self.map_pose = (0, 0)
+        self.search_radius = 10
+        self.path = np.copy(self.map_pose).reshape(-1, 2)
+        self.sensor_seq = np.empty((0, 2))
 
         self.sensor_model_update_every = 0
         self.camera_model_update_every = 0
@@ -116,7 +117,7 @@ class Agent(object):
             self.camera_visited = tmp.reshape(self.env.shape)
 
     def update_model(self, source):
-        print(source, ' updated')
+        # print(source, ' updated')
         if source == 'sensor':
             if self.sensor_model_type == 'GP':
                 self.sensor_model.fit(self.sensor_x, self.sensor_y)
@@ -142,16 +143,20 @@ class Agent(object):
             raise NotImplementedError
 
     def render(self):
-        # todo: write a better rendering environment
         plt.figure(0)
-        plot = self.env.map.oc_grid
+        plt.set_cmap('hot')
 
+        plot = 1.0 - np.repeat(self.env.map.oc_grid[:, :, np.newaxis], 3, axis=2)
         # highlight camera measurement
         if self.path.shape[0] > 0:
-            plot[self.path[:, 0], self.path[:, 1]] = 0.5
-        plot[self.map_pose] = 0.7
-        plt.imshow(plot)
-        plt.pause(.1)
+            plot[self.path[:, 0], self.path[:, 1], :] = [.75, .75, .5]
+        # highlight sensor measurement
+        if self.sensor_seq.shape[0] > 0:
+            plot[self.sensor_seq[:, 0], self.sensor_seq[:, 1]] = [.05, 1, .05]
+
+        plot[self.map_pose[0], self.map_pose[1], :] = [0, 0, 1]
+        plt.imshow(plot, interpolation='nearest')
+        plt.pause(.01)
 
     def maximum_entropy(self, source):
         if source == 'sensor':
@@ -226,7 +231,7 @@ class Agent(object):
             self._step(best_node)
             if render:
                 self.render()
-            ipdb.set_trace()
+            # ipdb.set_trace()
 
     def _step(self, next_node):
         gp_index = self.env.map_pose_to_gp_index(next_node.map_pose)
@@ -238,7 +243,11 @@ class Agent(object):
         self.add_samples('camera', indices)
         self.update_model('camera')
         self.update_model('sensor')
+
+        self.path = np.concatenate([self.path, next_node.path], axis=0).astype(int)
         self.map_pose = next_node.map_pose
+        if self.env.map_pose_to_gp_index(self.map_pose) is not None:
+            self.sensor_seq = np.concatenate([self.sensor_seq, np.array(self.map_pose).reshape(-1, 2)]).astype(int)
 
     def _bfs_search(self, map_pose, max_distance):
         node = Node(map_pose, 0, 0, [])
