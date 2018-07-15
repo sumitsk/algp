@@ -4,14 +4,14 @@ import ipdb
 CONST = .5*np.log(2*np.pi*np.exp(1))
 
 
-def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, type='sum'):
+def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, algo='sum'):
     """
     :param num_rows: number of rows
     :param num_cols: number of columns
     :param k: number of gaussian component
     :param min_var: minimum variance
     :param max_var: maximum variance
-    :param type: sum / max of mixture of gaussians
+    :param algo: sum / max of mixture of Gaussians
     :return:
     """
     x, y = np.meshgrid(np.arange(num_rows), np.arange(num_cols))
@@ -26,9 +26,9 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, t
     for i in range(k):
         dist_sq = np.sum(np.square(grid - means[i].reshape(1, -1)), axis=1)
         tmp = np.exp(-dist_sq / variances[i])
-        if type == 'max':
+        if algo == 'max':
             y = np.maximum(y, tmp)
-        elif type == 'sum':
+        elif algo == 'sum':
             y += tmp
 
     return grid, y
@@ -69,33 +69,48 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, t
 #     return mi
 
 
-def mi_change(x, A, A_bar, kernel, noise_var):
-    """
-    :param x:
-    :param A:
-    :param A_bar:
-    :param kernel: Kernel
-    :param noise_var: measurement noise variance
-    :return: H(x|A) - H(x|A_bar)
-    """
-    e1 = conditional_entropy(x, A, kernel, noise_var)
-    e2 = conditional_entropy(x, A_bar, kernel, noise_var)
+def mi_change(x, a, a_bar, kernel, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):
+    e1 = conditional_entropy(x, a, kernel, x_noise_var, a_noise_var)
+    e2 = conditional_entropy(x, a_bar, kernel, x_noise_var, a_bar_noise_var)
     info = e1 - e2
     return info
 
 
-def conditional_entropy(x, A, kernel, noise_var):
-    """
-    :param x:
-    :param A:
-    :param kernel: Kernel
-    :param noise_var: variance due to measurement noise
-    :return: H(x|A)
-    """
-    x_ = x.reshape(-1, A.shape[-1])
-    sigma_AA = kernel(A, A) + noise_var * np.eye(A.shape[0])
-    sigma_xA = kernel(x_, A)
-    cov = kernel(x_, x_) - np.dot(np.dot(sigma_xA, np.linalg.inv(sigma_AA)), sigma_xA.T)
+def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var):
+    x_ = x.reshape(-1, a.shape[-1])
+    if x_noise_var is None:
+        x_noise_var = 0
+    if a_noise_var is None:
+        a_noise_var = 0
+    # ipdb.set_trace()
+
+    if isinstance(x_noise_var, int) or isinstance(x_noise_var, float):
+        x_noise_var_ = x_noise_var * np.eye(x_.shape[0])
+    elif isinstance(x_noise_var, list):
+        assert len(x_noise_var) == x_.shape[0], 'Size mismatch!!'
+        x_noise_var_ = np.diag(x_noise_var)
+    else:
+        raise NotImplementedError
+
+    if isinstance(a_noise_var, int) or isinstance(a_noise_var, float):
+        a_noise_var_ = a_noise_var * np.eye(a.shape[0])
+    elif isinstance(a_noise_var, list) or isinstance(a_noise_var, np.ndarray):
+        assert len(a_noise_var) == a.shape[0], 'Size mismatch!!'
+        a_noise_var_ = np.diag(a_noise_var)
+    else:
+        raise NotImplementedError
+
+    sigma_aa = kernel(a, a) + a_noise_var_
+    sigma_xa = kernel(x_, a)
+    sigma_xx = kernel(x_, x_) + x_noise_var_
+    cov = sigma_xx - np.dot(np.dot(sigma_xa, np.linalg.inv(sigma_aa)), sigma_xa.T)
     d = cov.shape[0]
     ent = d*CONST + .5*np.log(np.linalg.det(cov))
     return ent
+
+
+def is_valid_cell(cell, grid_shape):
+    if 0 <= cell[0] < grid_shape[0] and 0 <= cell[1] < grid_shape[1]:
+        return True
+    return False
+

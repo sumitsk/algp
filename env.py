@@ -1,4 +1,5 @@
 import numpy as np
+import ipdb
 
 from map import Map
 from utils import generate_gaussian_data
@@ -17,6 +18,7 @@ class FieldEnv(object):
         self.map = Map(num_rows, num_cols, num_row_pass, row_pass_width=1)
 
     def collect_samples(self, indices, noise_std):
+        # ipdb.set_trace()
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         return y
 

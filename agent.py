@@ -83,7 +83,7 @@ class Agent(object):
             raise NotImplementedError
 
     def _pre_train(self, num_samples):
-        ind = np.random.randint(0, self.env.X.shape[0], num_samples)
+        ind = np.random.randint(0, self.env.num_samples, num_samples)
         self.add_samples('sensor', ind)
         self.add_samples('camera', ind)
         self.update_model('sensor')
@@ -211,7 +211,7 @@ class Agent(object):
         a_ind = np.where(mask == 1)[0]
         A = self.env.X[a_ind, :]
         a_bar_ind = np.where(mask == 0)[0]
-        mi = np.zeros(self.env.X.shape[0])
+        mi = np.zeros(self.env.num_samples)
         for i, x in enumerate(self.env.X):
             if mask[i] == 0:
                 a_bar_ind = np.delete(a_bar_ind, np.where(a_bar_ind == i)[0][0])
