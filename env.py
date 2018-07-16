@@ -55,6 +55,20 @@ class FieldEnv(object):
     def gp_index_to_gp_pose(self, gp_index):
         return np.vstack(np.unravel_index(gp_index, self.shape)).T
 
+    def get_neighborhood(self, map_pose, radius):
+        pose = np.array(map_pose).reshape(-1, 2)
+        # manhattan distance
+        dists = np.sum(np.abs(self.map.all_poses - pose), axis=1)
+        mask = (dists <= radius)
+        valid_map_poses = self.map.all_poses[np.where(mask)[0]]
+        valid_gp_indices = []
+        # convert to gp index
+        for map_pose in valid_map_poses:
+            gp_index = self.map_pose_to_gp_index(tuple(map_pose))
+            if gp_index is not None:
+                valid_gp_indices.append(gp_index)
+        return valid_map_poses, valid_gp_indices
+
     # def _get_state(self):
     #     mu, std = self.gp.predict(self.x, return_std=True)
     #     pose = tuple(self.train_x[-1,:])
@@ -114,4 +128,7 @@ class FieldEnv(object):
     #     plt.imshow(self.state['variance'])
 
 
-
+if __name__ == '__main__':
+    env = FieldEnv(20, 20)
+    pose = (1, 0)
+    locs = env.get_neighborhood(pose, 10)

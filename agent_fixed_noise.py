@@ -12,39 +12,29 @@ from env import FieldEnv
 class Agent(object):
     def __init__(self, env, model_type='GP'):
         super()
+        self.env = env
         self.model_type = model_type
         self.model = None
-        
+        self._init_models()
+
         self.camera_noise = 1.0
-        self.sensor_noise = 0.05
-        
+        self.sensor_noise = 0.05        
         utility_types = ['entropy', 'information_gain']
         self.utility_type = utility_types[1]
         all_strategies = ['sensor_maximum_utility',
                           'camera_maximum_utility',
                           'informative']
         self.strategy = all_strategies[2]
-        self._init_models()
-
-        self.env = env
-        feature_dim = 2
-        # data collected by sensor and camera
-        self.sensor_x = np.empty((0, feature_dim))
-        self.sensor_y = np.empty((0,))
-        self.camera_x = np.empty((0, feature_dim))
-        self.camera_y = np.empty((0,))
-
-        self.visited = np.zeros(env.shape)
-        self.obs_y = np.zeros(env.shape)
-        self.obs_var_inv = np.zeros(env.shape)
+        
+        self.visited = np.zeros(env.num_samples)
+        self.obs_y = np.zeros(env.num_samples)
+        self.obs_var_inv = np.zeros(env.num_samples)
 
         self._pre_train(num_samples=20)
-        # initial pose
-        self.map_pose = (0, 0)
+        self.agent_map_pose = (0, 0)
         self.search_radius = 10
-        self.path = np.copy(self.map_pose).reshape(-1, 2)
+        self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
-
         self.model_update_every = 0
         self.last_update = 0
 
@@ -67,25 +57,23 @@ class Agent(object):
         y = self.env.collect_samples(indices, noise)
         y_noise = np.full(len(indices), noise)
         self._handle_data(indices, y, y_noise)
-        locations = self.env.gp_index_to_gp_pose(indices)
-        self.visited[locations[:, 0], locations[:, 1]] = 1
+        self.visited[indices] = 1
 
     def _handle_data(self, indices, y, var):
         var_inv = 1.0/np.array(var)
-        locations = self.env.gp_index_to_gp_pose(indices)
-        old_obs = self.obs_y[locations[:, 0], locations[:, 1]]
-        old_var_inv = self.obs_var_inv[locations[:, 0], locations[:, 1]]
+        old_obs = self.obs_y[indices]
+        old_var_inv = self.obs_var_inv[indices]
         new_obs = (old_obs * old_var_inv + y * var_inv)/(old_var_inv + var_inv)
         new_var_inv = var_inv + old_var_inv
 
-        self.obs_y[locations[:, 0], locations[:, 1]] = new_obs
-        self.obs_var_inv[locations[:, 0], locations[:, 1]] = new_var_inv
+        self.obs_y[indices] = new_obs
+        self.obs_var_inv[indices] = new_var_inv
 
     def update_model(self):
-        indices = np.where(self.visited.flatten() == 1)[0]
+        indices = np.where(self.visited == 1)[0]
         x = self.env.X[indices, :]
-        var = 1.0/(self.obs_var_inv.flatten()[indices])
-        y = self.obs_y.flatten()[indices]
+        var = 1.0/(self.obs_var_inv[indices])
+        y = self.obs_y[indices]
 
         if self.model_type == 'GP':
             self.model.alpha = var
@@ -93,7 +81,7 @@ class Agent(object):
         else:
             raise NotImplementedError
 
-    def run(self, render=False, iterations=50):
+    def run(self, render=False, iterations=20):
         if render:
             plt.ion()
 
@@ -104,9 +92,10 @@ class Agent(object):
             raise NotImplementedError
             # self.step_max_utility('camera', render, iterations)
         elif self.strategy == 'informative':
-            self.step_informative(render, iterations)
+            self.run_informative(render, iterations)
         else:
             raise NotImplementedError
+        ipdb.set_trace()
 
     def render(self):
         plt.figure(0)
@@ -120,7 +109,7 @@ class Agent(object):
         if self.sensor_seq.shape[0] > 0:
             plot[self.sensor_seq[:, 0], self.sensor_seq[:, 1]] = [.05, 1, .05]
 
-        plot[self.map_pose[0], self.map_pose[1], :] = [0, 0, 1]
+        plot[self.agent_map_pose[0], self.agent_map_pose[1], :] = [0, 0, 1]
         plt.imshow(plot, interpolation='nearest')
         plt.pause(.01)
 
@@ -191,25 +180,29 @@ class Agent(object):
     #     idx = np.argmin(distances)
     #     return gp_indices[idx], map_poses[idx]
 
-    def step_informative(self, render, iterations):
+    def run_informative(self, render, iterations):
         for i in range(iterations):
-            best_node = self._bfs_search(self.map_pose, self.search_radius)
-            self._step(best_node)
+            # find next node to visit
+            next_node = self._bfs_search(self.agent_map_pose, self.search_radius)
+            
+            # add samples (camera and sensor)
+            self.add_samples(next_node.parents_index, self.camera_noise)
+            gp_index = self.env.map_pose_to_gp_index(next_node.map_pose)
+            if gp_index is not None:
+                self.add_samples([gp_index], self.sensor_noise)
+
+            # update GP model
+            self.update_model()
+            
+            # update agent history
+            self.path = np.concatenate([self.path, next_node.path], axis=0).astype(int)
+            self.agent_map_pose = next_node.map_pose
+            if gp_index is not None:
+                self.sensor_seq = np.concatenate(
+                    [self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
+
             if render:
                 self.render()
-            # ipdb.set_trace()
-
-    def _step(self, next_node):
-        self.add_samples(next_node.parents_index, self.camera_noise)
-        gp_index = self.env.map_pose_to_gp_index(next_node.map_pose)
-        if gp_index is not None:
-            self.add_samples([gp_index], self.sensor_noise)
-
-        self.update_model()
-        self.path = np.concatenate([self.path, next_node.path], axis=0).astype(int)
-        self.map_pose = next_node.map_pose
-        if self.env.map_pose_to_gp_index(self.map_pose) is not None:
-            self.sensor_seq = np.concatenate([self.sensor_seq, np.array(self.map_pose).reshape(-1, 2)]).astype(int)
 
     def _bfs_search(self, map_pose, max_distance):
         node = Node(map_pose, 0, 0, [])
@@ -283,17 +276,21 @@ class Agent(object):
         a = self.model.X_train_
         a_noise_var = self.model.alpha
         if self.utility_type == 'information_gain':
-            unvisited_indices = np.where(self.visited.flatten() == 0)[0]
+            unvisited_indices = np.where(self.visited == 0)[0]
             a_bar = self.env.X[unvisited_indices, :]
             info = mi_change(x, a, a_bar, self.model.kernel,
-                             x_noise_var, a_noise_var, a_bar_noise_var=None)
+                             x_noise_var, a_noise_var,
+                             a_bar_noise_var=None)
         elif self.utility_type == 'entropy':
             info = conditional_entropy(x, a, self.model.kernel,
                                        x_noise_var, a_noise_var)
         else:
             raise NotImplementedError
-        ipdb.set_trace()
         return info
+
+    @property
+    def sampled_indices(self):
+        return np.where(self.visited == 1)[0]
 
 
 class Node(object):
@@ -308,4 +305,4 @@ class Node(object):
 if __name__ == '__main__':
     env = FieldEnv(num_rows=20, num_cols=20)
     agent = Agent(env, model_type='GP')
-    agent.run(render=True)
+    agent.run(render=True)  

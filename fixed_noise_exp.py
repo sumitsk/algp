@@ -17,7 +17,7 @@ if __name__ == '__main__':
 
     kernel = RBF(length_scale=1.0)
     model = gaussian_process.GaussianProcessRegressor(
-                kernel, alpha = noise_std ** 2)
+                kernel, alpha=noise_std**2)
     model.fit(X, Y)
 
     ipdb.set_trace()
