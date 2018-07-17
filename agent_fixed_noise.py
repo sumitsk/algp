@@ -303,6 +303,6 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=20, num_cols=20)
+    env = FieldEnv(num_rows=40, num_cols=40)
     agent = Agent(env, model_type='GP')
     agent.run(render=True)  

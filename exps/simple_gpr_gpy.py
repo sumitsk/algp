@@ -3,7 +3,6 @@ import torch
 import gpytorch
 from matplotlib import pyplot as plt
 
-from torch import optim
 from gpytorch.kernels import RBFKernel
 from gpytorch.means import ConstantMean
 from gpytorch.likelihoods import GaussianLikelihood
@@ -13,6 +12,7 @@ from gpytorch.random_variables import GaussianRandomVariable
 import ipdb
 
 assert torch.__version__ == '0.4.0', 'Use Pytorch 0.4.0'
+
 
 # Define plotting function
 def ax_plot(ax, rand_var, title):
@@ -90,6 +90,7 @@ class ExactGP(object):
         ax_plot(observed_ax, pred, 'Observed Values (Likelihood)')    
         plt.show()
 
+
 class ManifoldExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, feature_dim=1):
         super(ManifoldExactGPModel, self).__init__(train_x, train_y, likelihood)
@@ -104,6 +105,7 @@ class ManifoldExactGPModel(gpytorch.models.ExactGP):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return GaussianRandomVariable(mean_x, covar_x)
+
 
 if __name__ == '__main__':
     # Training data is 11 points in [0,1] inclusive regularly spaced

@@ -1,34 +1,10 @@
 import numpy as np
 import ipdb
 
-from utils import generate_gaussian_data, conditional_entropy, mutual_information
+from utils import generate_gaussian_data, entropy, conditional_entropy
 from sklearn import gaussian_process
 from sklearn.gaussian_process.kernels import RBF
-from utils import conditional_entropy
 
-
-def get_measurement(indices, noise_std, Y):
-    y = Y[indices] + np.random.normal(0, noise_std, size=len(indices))
-    return y
-
-
-def entropy(y, A, model, noise_std):
-    # ipdb.set_trace()
-    kernel = model.kernel_
-    dim = len(y)
-    y = y.reshape(-1, dim)
-    A = A.reshape(-1, dim)
-    n = y.shape[0]
-
-    sigma_AA = kernel(A, A) + noise_std**2 * np.eye(A.shape[0])
-    sigma_yA = kernel(y, A)
-    cov1 = kernel(y, y) - np.dot(np.dot(sigma_yA, np.linalg.inv(sigma_AA)), sigma_yA.T)
-    ent1 = .5*np.log(((2*np.pi*np.exp(1))**n)*np.linalg.det(cov1))
-    # mu1 =
-
-    ent2 = conditional_entropy(y, model)
-
-    return ent2
 
 # originally in env.py file
 # @deprecated
@@ -72,45 +48,32 @@ def entropy(y, A, model, noise_std):
 #     # if err > .01:
 #     #     ipdb.set_trace()
 
-# @deprecated
-# def nearby_locations(self, pose, max_distance):
-#     # returns all locations which are less than max distance apart from the current pose
-#     # run a BFS search and find all unvisited locations {O(max_distance)}
-#
-#     locations = self.env.map.get_nearby_locations(pose, max_distance)
-#
-#     # remove those which have already been sensed
-#     ind = np.ravel_multi_index(locations.T, self.sensor_visited.shape)
-#     remove_indices = np.where(self.sensor_visited.flatten()[ind] == 1)[0]
-#     locations = np.delete(locations, remove_indices, axis=0)
-#     return locations
-
 
 if __name__ == '__main__':
     num_rows = 20
     num_cols = 20
     n = num_rows * num_cols
-    sampled = np.zeros(n)
-    noise_std = 0.1
+    n_train = 10
     X, Y = generate_gaussian_data(num_rows, num_cols)
+    indices_train = np.random.randint(0, n, n_train)
+    x_train = X[indices_train, :]
+    std = .5
+    var = std**2
+    y_train = Y[indices_train] + np.random.normal(0, std, n_train)
 
     krnl = RBF(length_scale=1.0)
-    model = gaussian_process.GaussianProcessRegressor(krnl, alpha=noise_std**2)
-    indices = np.random.randint(low=0, high=n, size=10)
-    sampled[indices] = 1
-    model.fit(X[indices], get_measurement(indices, noise_std, Y))
+    gp = gaussian_process.GaussianProcessRegressor(krnl)
+    gp.fit(x_train, y_train)
 
-    # verify the chain rule of entropy
-    ind = np.random.randint(low=0, high=n, size=2)
-    # e1 = entropy(X[ind[0], :], X[indices], model, noise_std)
-    # e2 = entropy(X[ind[1], :], X[np.array(list(indices) + [ind[0]])], model, noise_std)
-    # e3 = entropy(X[ind, :], X[indices, :], model, noise_std)
+    n_test = 6
+    indices = np.random.randint(0, n, n_test)
+    x = X[indices, :]
+    joint_ent = entropy(x, gp.kernel_, var)
+    ents = []
+    for i in range(n_test):
+        ents.append(conditional_entropy(x[i], x[0:i], gp.kernel_, var, var))
 
-    e1 = conditional_entropy(X[ind, :], model)
-    mi = mutual_information(X[ind, :], model)
-
-    ipdb.set_trace()
-    # print(e1 + e2 - e3)
-
+    print('Joint entropy ', joint_ent)
+    print('Sum of conditional entropies ', sum(ents))
 
 

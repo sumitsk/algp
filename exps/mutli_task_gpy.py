@@ -3,13 +3,13 @@ import torch
 import gpytorch
 from matplotlib import pyplot as plt
 
-from torch import optim
 from gpytorch.kernels import RBFKernel, IndexKernel
 from gpytorch.means import ConstantMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
 import ipdb
+
 
 # Define plotting function
 def ax_plot(ax, train_y, rand_var, title):
@@ -96,6 +96,7 @@ class MultitaskGP(object):
         ax_plot(y1_ax, train_y1, pred_y1, 'Observed Values (Likelihood)')
         ax_plot(y2_ax, train_y2, pred_y2, 'Observed Values (Likelihood)')
         plt.show()
+
 
 if __name__ == '__main__':
     train_x = torch.linspace(0, 1, 11)

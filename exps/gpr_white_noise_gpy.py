@@ -3,7 +3,6 @@ import torch
 import gpytorch
 from matplotlib import pyplot as plt
 
-from torch import optim
 from gpytorch.kernels import RBFKernel, WhiteNoiseKernel
 from gpytorch.means import ConstantMean
 from gpytorch.likelihoods import GaussianLikelihood
@@ -12,6 +11,7 @@ from gpytorch.random_variables import GaussianRandomVariable
 import ipdb
 
 assert torch.__version__ == '0.4.0', 'Use Pytorch 0.4.0'
+
 
 # Define plotting function
 def ax_plot(ax, rand_var, title, train_x, train_y, test_x):
@@ -44,6 +44,7 @@ class ExactGPModel(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return GaussianRandomVariable(mean_x, covar_x)
 
+
 class ExactGP(object):
     def __init__(self, train_x, train_y, white_noise_variances=None, likelihood_log_noise=None):
         self.likelihood = GaussianLikelihood(log_noise_bounds=(-5, 5), fixed_log_noise=likelihood_log_noise)
@@ -63,7 +64,6 @@ class ExactGP(object):
         training_iter = 500
         for i in range(training_iter):
             self.optimizer.zero_grad()
-            # ipdb.set_trace()
             output = self.model(self.train_x)
             loss = -self.mll(output, self.train_y)
             loss.backward()
@@ -86,6 +86,7 @@ class ExactGP(object):
             self.train_x, self.train_y, test_x)    
         plt.show()
 
+
 if __name__ == '__main__':
     train_x = torch.linspace(0, 2, 51)
     train_y = torch.sin(train_x.data * (2 * math.pi)) + torch.randn(train_x.size()) * 0.2    
@@ -96,5 +97,3 @@ if __name__ == '__main__':
     gp1.fit()
     test_x = torch.linspace(0, 2, 101)
     gp1.test(test_x)
-    
-    ipdb.set_trace()

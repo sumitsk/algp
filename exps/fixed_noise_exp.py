@@ -1,5 +1,5 @@
 from sklearn import gaussian_process
-from sklearn.gaussian_process.kernels import Matern, RBF
+from sklearn.gaussian_process.kernels import RBF
 from env import FieldEnv
 
 import ipdb

@@ -76,30 +76,40 @@ def mi_change(x, a, a_bar, kernel, x_noise_var=None, a_noise_var=None, a_bar_noi
     return info
 
 
+def process_noise_var(dim, noise_var):
+    if noise_var is None:
+        noise_var_ = 0
+    elif isinstance(noise_var, int) or isinstance(noise_var, float):
+        noise_var_ = noise_var * np.eye(dim)
+    elif isinstance(noise_var, list) or isinstance(noise_var, np.ndarray):
+        assert len(noise_var) == dim, 'Size mismatch!!'
+        noise_var_ = np.diag(noise_var)
+    else:
+        raise NotImplementedError
+    return noise_var_
+
+
+def entropy(x, kernel, x_noise_var):
+    x_ = np.copy(x)
+    if x.ndim == 1:
+        x_ = x.reshape(-1, len(x))
+
+    x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
+    cov = kernel(x_, x_) + x_noise_var_
+    d = cov.shape[0]
+    ent = d*CONST + .5*np.log(np.linalg.det(cov))
+    return ent
+
+
 def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var):
+    assert a.ndim == 2, 'Matrix A must be 2-dimensional!'
+    if a.shape[0] == 0:
+        return entropy(x, kernel, x_noise_var)
+
     x_ = x.reshape(-1, a.shape[-1])
-    if x_noise_var is None:
-        x_noise_var = 0
-    if a_noise_var is None:
-        a_noise_var = 0
-    # ipdb.set_trace()
-
-    if isinstance(x_noise_var, int) or isinstance(x_noise_var, float):
-        x_noise_var_ = x_noise_var * np.eye(x_.shape[0])
-    elif isinstance(x_noise_var, list):
-        assert len(x_noise_var) == x_.shape[0], 'Size mismatch!!'
-        x_noise_var_ = np.diag(x_noise_var)
-    else:
-        raise NotImplementedError
-
-    if isinstance(a_noise_var, int) or isinstance(a_noise_var, float):
-        a_noise_var_ = a_noise_var * np.eye(a.shape[0])
-    elif isinstance(a_noise_var, list) or isinstance(a_noise_var, np.ndarray):
-        assert len(a_noise_var) == a.shape[0], 'Size mismatch!!'
-        a_noise_var_ = np.diag(a_noise_var)
-    else:
-        raise NotImplementedError
-
+    x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
+    a_noise_var_ = process_noise_var(a.shape[0], a_noise_var)
+    
     sigma_aa = kernel(a, a) + a_noise_var_
     sigma_xa = kernel(x_, a)
     sigma_xx = kernel(x_, x_) + x_noise_var_
