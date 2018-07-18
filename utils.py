@@ -4,7 +4,7 @@ import ipdb
 CONST = .5*np.log(2*np.pi*np.exp(1))
 
 
-def generate_gaussian_data(num_rows, num_cols, k=5, min_var=100, max_var=1000, algo='sum'):
+def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum'):
     """
     :param num_rows: number of rows
     :param num_cols: number of columns
@@ -101,7 +101,7 @@ def entropy(x, kernel, x_noise_var):
     return ent
 
 
-def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var):
+def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var, sigma_aa_inv=None):
     assert a.ndim == 2, 'Matrix A must be 2-dimensional!'
     if a.shape[0] == 0:
         return entropy(x, kernel, x_noise_var)
@@ -109,11 +109,12 @@ def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var):
     x_ = x.reshape(-1, a.shape[-1])
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
     a_noise_var_ = process_noise_var(a.shape[0], a_noise_var)
-    
-    sigma_aa = kernel(a, a) + a_noise_var_
+
+    if sigma_aa_inv is None:
+        sigma_aa_inv = np.linalg.inv(kernel(a, a) + a_noise_var_)
     sigma_xa = kernel(x_, a)
     sigma_xx = kernel(x_, x_) + x_noise_var_
-    cov = sigma_xx - np.dot(np.dot(sigma_xa, np.linalg.inv(sigma_aa)), sigma_xa.T)
+    cov = sigma_xx - np.dot(np.dot(sigma_xa, sigma_aa_inv), sigma_xa.T)
     d = cov.shape[0]
     ent = d*CONST + .5*np.log(np.linalg.det(cov))
     return ent

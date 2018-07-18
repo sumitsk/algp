@@ -18,7 +18,7 @@ class Agent(object):
         self._init_models()
 
         self.camera_noise = 1.0
-        self.sensor_noise = 0.05        
+        self.sensor_noise = 0.5
         utility_types = ['entropy', 'information_gain']
         self.utility_type = utility_types[1]
         all_strategies = ['sensor_maximum_utility',
@@ -30,9 +30,9 @@ class Agent(object):
         self.obs_y = np.zeros(env.num_samples)
         self.obs_var_inv = np.zeros(env.num_samples)
 
-        self._pre_train(num_samples=20)
+        self._pre_train(num_samples=5, only_sensor=True)
         self.agent_map_pose = (0, 0)
-        self.search_radius = 10
+        self.search_radius = 12
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
         self.model_update_every = 0
@@ -47,10 +47,13 @@ class Agent(object):
         else:
             raise NotImplementedError
 
-    def _pre_train(self, num_samples):
+    def _pre_train(self, num_samples, only_sensor=False):
         ind = np.random.randint(0, self.env.num_samples, num_samples)
-        self.add_samples(ind[:num_samples//2], self.camera_noise)
-        self.add_samples(ind[num_samples//2:], self.sensor_noise)
+        if only_sensor:
+            self.add_samples(ind, self.sensor_noise)
+        else:
+            self.add_samples(ind[:num_samples//2], self.camera_noise)
+            self.add_samples(ind[num_samples//2:], self.sensor_noise)
         self.update_model()
         
     def add_samples(self, indices, noise):
@@ -81,10 +84,7 @@ class Agent(object):
         else:
             raise NotImplementedError
 
-    def run(self, render=False, iterations=20):
-        if render:
-            plt.ion()
-
+    def run(self, render=False, iterations=40):
         if self.strategy == 'sensor_maximum_utility':
             raise NotImplementedError
             # self.step_max_utility('sensor', render, iterations)
@@ -95,12 +95,9 @@ class Agent(object):
             self.run_informative(render, iterations)
         else:
             raise NotImplementedError
-        ipdb.set_trace()
 
-    def render(self):
-        plt.figure(0)
-        plt.set_cmap('hot')
-
+    def _render_path(self, ax):
+        # ax.set_cmap('hot')
         plot = 1.0 - np.repeat(self.env.map.oc_grid[:, :, np.newaxis], 3, axis=2)
         # highlight camera measurement
         if self.path.shape[0] > 0:
@@ -110,8 +107,23 @@ class Agent(object):
             plot[self.sensor_seq[:, 0], self.sensor_seq[:, 1]] = [.05, 1, .05]
 
         plot[self.agent_map_pose[0], self.agent_map_pose[1], :] = [0, 0, 1]
-        plt.imshow(plot, interpolation='nearest')
-        plt.pause(.01)
+        ax.set_title('Environment')
+        ax.imshow(plot)
+
+    def render(self, ax, pred, var):
+        # render path
+        self._render_path(ax[0, 0])
+
+        # render plots
+        axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
+        axt.set_title('True values')
+        axt.imshow(self.env.Y.reshape(self.env.shape))
+
+        axp.set_title('Predicted values')
+        axp.imshow(pred.reshape(self.env.shape))
+
+        axv.set_title('Variance')
+        axv.imshow(var.reshape(self.env.shape))
 
     # def maximum_entropy(self, source):
     #     if source == 'sensor':
@@ -180,7 +192,16 @@ class Agent(object):
     #     idx = np.argmin(distances)
     #     return gp_indices[idx], map_poses[idx]
 
+    def predict(self):
+        # specific to sklearn GPR
+        pred, sig = self.model.predict(self.env.X, return_std=True)
+        return pred, sig**2
+
     def run_informative(self, render, iterations):
+        if render:
+            plt.ion()
+            f, ax = plt.subplots(2, 2, figsize=(12, 8))
+
         for i in range(iterations):
             # find next node to visit
             next_node = self._bfs_search(self.agent_map_pose, self.search_radius)
@@ -193,7 +214,7 @@ class Agent(object):
 
             # update GP model
             self.update_model()
-            
+
             # update agent history
             self.path = np.concatenate([self.path, next_node.path], axis=0).astype(int)
             self.agent_map_pose = next_node.map_pose
@@ -201,8 +222,14 @@ class Agent(object):
                 self.sensor_seq = np.concatenate(
                     [self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
 
+            pred, var = self.predict()
+            if np.mean(var) < .001:
+                break
+
             if render:
-                self.render()
+                self.render(ax, pred, var)
+                plt.pause(.1)
+        ipdb.set_trace()
 
     def _bfs_search(self, map_pose, max_distance):
         node = Node(map_pose, 0, 0, [])
@@ -241,7 +268,10 @@ class Agent(object):
                                     new_parents_index, new_path)
                     open_nodes.append(new_node)
 
+        # NOTE: computational bottleneck
         # compute sensor and camera utility
+        # all_nodes_indices = []
+        # all_nodes_x_noise = []
         for node in closed_nodes:
             gp_index = self.env.map_pose_to_gp_index(node.map_pose)
             if gp_index is not None:
@@ -250,13 +280,48 @@ class Agent(object):
             else:
                 indices = node.parents_index
                 x_noise = [self.camera_noise] * len(node.parents_index)
-            # ipdb.set_trace()
             node.utility = self._get_utility(indices, x_noise)
-
+            # all_nodes_indices.append(indices)
+            # all_nodes_x_noise.append(x_noise)
+        # self._temp(map_pose, max_distance, all_nodes_indices, all_nodes_x_noise)
         total_utility = [node.utility for node in closed_nodes]
         best_node = closed_nodes[np.argmax(total_utility).item()]
         return best_node
 
+    # this function is supposed to speed up utility computation by sharing info across
+    # all nodes and avoiding computing inverse all the time.
+    # BUG: det(cov) comes to be about 0. (remember: det are poorly scaled beasts)
+    # def _temp(self, map_pose, max_distance, nodes_indices, nodes_x_noise):
+    #     neighbor_map_poses, neighbor_gp_indices = self.env.get_neighborhood(map_pose, max_distance)
+    #
+    #     # specific to sklearn GPR
+    #     a = self.model.X_train_
+    #     a_noise = self.model.alpha
+    #     kernel = self.model.kernel_
+    #     sigma_aa = kernel(a, a) + np.diag(a_noise)
+    #     sigma_aa_inv = np.linalg.inv(sigma_aa)
+    #
+    #     temp = np.copy(self.visited)
+    #     temp[neighbor_gp_indices] = 1
+    #     a_prime_indices = np.where(temp == 0)[0]
+    #     a_prime = self.env.X[a_prime_indices, :]
+    #     sigma_apap = kernel(a_prime, a_prime) + .05*np.eye(a_prime.shape[0])
+    #     sigma_apap_inv = np.linalg.inv(sigma_apap)
+    #
+    #     ipdb.set_trace()
+    #     info = []
+    #     for ind, var in zip(nodes_indices, nodes_x_noise):
+    #         y = self.env.X[ind, :]
+    #         e1 = conditional_entropy(y, a, kernel, var, a_noise, sigma_aa_inv)
+    #         ind2 = [x for x in neighbor_gp_indices if x not in ind]
+    #         y2 = self.env.X[ind2, :]
+    #         e2 = conditional_entropy(y2, a_prime, kernel, 0.05, 0, sigma_apap_inv)
+    #         ind3 = ind2 + ind
+    #         y3 = self.env.X[ind3, :]
+    #         e3 = conditional_entropy(y3, a_prime, kernel, 0.05, 0, sigma_apap_inv)
+    #         info.append(e1 + e2 - e3)
+    #     ipdb.set_trace()
+    #
     # def plot_variance(self, source):
     #     if source == 'camera':
     #         mu, std = self.camera_model.predict(self.env.X, return_std=True)
@@ -303,6 +368,6 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=40, num_cols=40)
+    env = FieldEnv(num_rows=20, num_cols=20)
     agent = Agent(env, model_type='GP')
     agent.run(render=True)  
