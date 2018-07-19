@@ -1,5 +1,6 @@
 import numpy as np
 import ipdb
+import matplotlib.pyplot as plt
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
 
@@ -32,6 +33,42 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, alg
             y += tmp
 
     return grid, y
+
+
+def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2, algo='sum'):
+    x, y = np.meshgrid(np.arange(num_rows), np.arange(num_cols))
+    grid = np.vstack([y.flatten(), x.flatten()]).transpose()
+    n = num_rows * num_cols
+    z_ind = np.random.randint(0, num_zs, n)
+    z = np.zeros((n, num_zs))
+    z[np.arange(n), z_ind] = 1
+    grid = np.concatenate([grid, z], axis=1)
+    a, b = grid[:, 0].max(), grid[:, 1].max()
+    grid[:, 0] /= a
+    grid[:, 1] /= b
+
+    means_x = np.random.uniform(0, num_rows, size=k) / a
+    means_y = np.random.uniform(0, num_cols, size=k) / b
+    means_z_ind = np.random.randint(0, num_zs, size=k)
+    means_z = np.zeros((k, num_zs))
+    means_z[np.arange(k), means_z_ind] = 1
+    means = np.vstack([means_x, means_y]).transpose()
+    means = np.concatenate([means, means_z], axis=1)
+    variances = np.random.uniform(min_var, max_var, size=k)
+
+    y = np.zeros(n)
+    for i in range(k):
+        dist_sq = np.sum(np.square(grid - means[i].reshape(1, -1)), axis=1)
+        tmp = np.exp(-dist_sq / variances[i])
+        if algo == 'max':
+            y = np.maximum(y, tmp)
+        elif algo == 'sum':
+            y += tmp
+    # plt.imshow(y.reshape(num_rows, num_cols))
+    # plt.show()
+    # ipdb.set_trace()
+    return grid, y
+
 
 # @deprecated
 # def conditional_entropy(x, model):
@@ -78,7 +115,7 @@ def mi_change(x, a, a_bar, kernel, x_noise_var=None, a_noise_var=None, a_bar_noi
 
 def process_noise_var(dim, noise_var):
     if noise_var is None:
-        noise_var_ = 0
+        noise_var_ = 0.05
     elif isinstance(noise_var, int) or isinstance(noise_var, float):
         noise_var_ = noise_var * np.eye(dim)
     elif isinstance(noise_var, list) or isinstance(noise_var, np.ndarray):
@@ -125,3 +162,6 @@ def is_valid_cell(cell, grid_shape):
         return True
     return False
 
+
+if __name__ == '__main__':
+    data = generate_mixed_data(15, 15, 4)

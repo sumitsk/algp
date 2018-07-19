@@ -2,7 +2,7 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import generate_gaussian_data
+from utils import generate_gaussian_data, generate_mixed_data
 
 
 class FieldEnv(object):
@@ -10,7 +10,8 @@ class FieldEnv(object):
         super(FieldEnv, self).__init__()
 
         self.num_rows, self.num_cols = num_rows, num_cols
-        self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
+        # self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
+        self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
         # Map of Field
         num_row_pass = 4
@@ -18,7 +19,6 @@ class FieldEnv(object):
         self.map = Map(num_rows, num_cols, num_row_pass, row_pass_width=1)
 
     def collect_samples(self, indices, noise_std):
-        # ipdb.set_trace()
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         return y
 

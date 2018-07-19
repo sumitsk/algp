@@ -47,26 +47,36 @@ class ExactGPModel(gpytorch.models.ExactGP):
 
 
 class ExactGP(object):
-    def __init__(self, train_x, train_y, use_embed=False):
+    def __init__(self, use_embed=False):
+        self.use_embed = use_embed
+        self.likelihood = None
+        self.model = None
+        self.optimizer = None
+        self.mll = None
+        self.train_x = None
+        self.train_y = None
+
+    def reset(self, train_x, train_y):
         self.likelihood = GaussianLikelihood(log_noise_bounds=(-5, 5))
-        if use_embed:
+        if self.use_embed:
             self.model = ManifoldExactGPModel(train_x.data, train_y.data, self.likelihood)
         else:
             self.model = ExactGPModel(train_x.data, train_y.data, self.likelihood)
-            
+
         self.optimizer = torch.optim.Adam([
             {'params': self.model.parameters()},
-            ], lr=0.1)
+        ], lr=0.1)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
 
         self.train_y = train_y
         self.train_x = train_x
 
-    def fit(self):
+    def fit(self, train_x, train_y):
+        self.reset(train_x, train_y)
         self.model.train()
         self.likelihood.train()
 
-        training_iter = 500
+        training_iter = 100
         for i in range(training_iter):
             self.optimizer.zero_grad()
             output = self.model(self.train_x)
@@ -100,7 +110,6 @@ class ManifoldExactGPModel(gpytorch.models.ExactGP):
         self.fc = torch.nn.Linear(feature_dim, embed_dim)
 
     def forward(self, x):
-        # ipdb.set_trace()
         x = self.fc(x)
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
@@ -108,20 +117,27 @@ class ManifoldExactGPModel(gpytorch.models.ExactGP):
 
 
 if __name__ == '__main__':
-    # Training data is 11 points in [0,1] inclusive regularly spaced
     train_x = torch.linspace(0, 1, 11)
-    # True function is sin(2*pi*x) with Gaussian noise
     train_y = torch.sin(train_x.data * (2 * math.pi)) + torch.randn(train_x.size()) * 0.2
 
-    gp1 = ExactGP(train_x, train_y, use_embed=False)
-    gp1.fit()
-    p1 = [param for param in gp1.model.named_parameters()]
+    import numpy as np
+    x = np.load('gpx.npy')
+    y = np.load('gpy.npy')
 
-    # gp2 = ExactGP(train_x, train_y, use_embed=True)
-    # gp2.fit()
-    # p2 = [param for param in gp2.model.named_parameters()]
-    
-    test_x = torch.linspace(0, 1, 51)
-    gp1.test(test_x)
+    ipdb.set_trace()
+
+    torch.manual_seed(1)
+    from models import GpytorchGPR
+    gp = GpytorchGPR()
+    gp.fit(x, y)
+
+    # train_x = torch.FloatTensor(x)
+    # train_y = torch.FloatTensor(y)
+
+    # gp1 = ExactGP(use_embed=False)
+    # gp1.fit(train_x, train_y)
+    # p1 = [param for param in gp1.model.named_parameters()]
+    # test_x = torch.linspace(0, 1, 51)
+    # gp1.test(test_x)
     # gp2.test(test_x)
 

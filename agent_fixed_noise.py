@@ -1,5 +1,3 @@
-from sklearn import gaussian_process
-from sklearn.gaussian_process.kernels import Matern, RBF
 import ipdb
 import numpy as np
 from copy import deepcopy
@@ -7,18 +5,19 @@ import matplotlib.pyplot as plt
 
 from utils import mi_change, conditional_entropy, is_valid_cell
 from env import FieldEnv
+from models import SklearnGPR, GpytorchGPR
 
 
 class Agent(object):
-    def __init__(self, env, model_type='GP'):
+    def __init__(self, env, model_type='gpytorch_GP'):
         super()
         self.env = env
-        self.model_type = model_type
-        self.model = None
+        self.gp_type = model_type
+        self.gp = None
         self._init_models()
 
         self.camera_noise = 1.0
-        self.sensor_noise = 0.5
+        self.sensor_noise = 0.05
         utility_types = ['entropy', 'information_gain']
         self.utility_type = utility_types[1]
         all_strategies = ['sensor_maximum_utility',
@@ -32,18 +31,17 @@ class Agent(object):
 
         self._pre_train(num_samples=5, only_sensor=True)
         self.agent_map_pose = (0, 0)
-        self.search_radius = 12
+        self.search_radius = 10
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
-        self.model_update_every = 0
+        self.gp_update_every = 0
         self.last_update = 0
 
     def _init_models(self):
-        if self.model_type == 'GP':
-            # kernel = Matern(length_scale=1.0, nu=1.5)
-            kernel = RBF(length_scale=1.0)
-            self.model = gaussian_process.GaussianProcessRegressor(
-                kernel)
+        if self.gp_type == 'sklearn_GP':
+            self.gp = SklearnGPR()
+        elif self.gp_type == 'gpytorch_GP':
+            self.gp = GpytorchGPR()
         else:
             raise NotImplementedError
 
@@ -77,12 +75,7 @@ class Agent(object):
         x = self.env.X[indices, :]
         var = 1.0/(self.obs_var_inv[indices])
         y = self.obs_y[indices]
-
-        if self.model_type == 'GP':
-            self.model.alpha = var
-            self.model.fit(x, y)
-        else:
-            raise NotImplementedError
+        self.gp.fit(x, y, var)
 
     def run(self, render=False, iterations=40):
         if self.strategy == 'sensor_maximum_utility':
@@ -183,7 +176,7 @@ class Agent(object):
     #         if mask[i] == 0:
     #             a_bar_ind = np.delete(a_bar_ind, np.where(a_bar_ind == i)[0][0])
     #         A_bar = self.env.X[a_bar_ind, :]
-    #         info = mi_change(x, model, A, A_bar, model.alpha)
+    #         info = mi_change(x, model, A, A_bar, model.train_var)
     #         mi[i] = info
     #
     #     gp_indices = np.where(mi == mi.max())[0]
@@ -194,7 +187,7 @@ class Agent(object):
 
     def predict(self):
         # specific to sklearn GPR
-        pred, sig = self.model.predict(self.env.X, return_std=True)
+        pred, sig = self.gp.predict(self.env.X, return_std=True)
         return pred, sig**2
 
     def run_informative(self, render, iterations):
@@ -223,7 +216,8 @@ class Agent(object):
                     [self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
 
             pred, var = self.predict()
-            if np.mean(var) < .001:
+            if np.mean(var) < .01:
+                print('Converged')
                 break
 
             if render:
@@ -295,9 +289,9 @@ class Agent(object):
     #     neighbor_map_poses, neighbor_gp_indices = self.env.get_neighborhood(map_pose, max_distance)
     #
     #     # specific to sklearn GPR
-    #     a = self.model.X_train_
-    #     a_noise = self.model.alpha
-    #     kernel = self.model.kernel_
+    #     a = self.gp.train_x
+    #     a_noise = self.gp.train_var
+    #     kernel = self.gp.kernel
     #     sigma_aa = kernel(a, a) + np.diag(a_noise)
     #     sigma_aa_inv = np.linalg.inv(sigma_aa)
     #
@@ -338,16 +332,16 @@ class Agent(object):
 
     def _get_utility(self, indices, x_noise_var):
         x = self.env.X[indices, :]
-        a = self.model.X_train_
-        a_noise_var = self.model.alpha
+        a = self.gp.train_x
+        a_noise_var = self.gp.train_var
         if self.utility_type == 'information_gain':
             unvisited_indices = np.where(self.visited == 0)[0]
             a_bar = self.env.X[unvisited_indices, :]
-            info = mi_change(x, a, a_bar, self.model.kernel,
+            info = mi_change(x, a, a_bar, self.gp.kernel,
                              x_noise_var, a_noise_var,
                              a_bar_noise_var=None)
         elif self.utility_type == 'entropy':
-            info = conditional_entropy(x, a, self.model.kernel,
+            info = conditional_entropy(x, a, self.gp.kernel,
                                        x_noise_var, a_noise_var)
         else:
             raise NotImplementedError
@@ -368,6 +362,6 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=20, num_cols=20)
-    agent = Agent(env, model_type='GP')
+    env = FieldEnv(num_rows=10, num_cols=10)
+    agent = Agent(env, model_type='sklearn_GP')
     agent.run(render=True)  
