@@ -1,8 +1,17 @@
 import numpy as np
 import ipdb
 import matplotlib.pyplot as plt
+import torch
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
+
+
+def to_torch(arr):
+    if arr is None:
+        return None
+    if arr.__class__.__module__ == 'numpy':
+        return torch.FloatTensor(arr)
+    return arr
 
 
 def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum'):
@@ -98,7 +107,7 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
 #     dim = model.X_train_.shape[-1]
 #     x_ = x.reshape(-1, dim)
 #     # todo: should noise be added too ?
-#     cov = model.kernel_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
+#     cov = model.gp_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
 #     d = cov.shape[0]
 #     ent = d*CONST + .5*np.log(np.linalg.det(cov))
 #     cond_ent = conditional_entropy(x, model)
@@ -106,9 +115,9 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
 #     return mi
 
 
-def mi_change(x, a, a_bar, kernel, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):
-    e1 = conditional_entropy(x, a, kernel, x_noise_var, a_noise_var)
-    e2 = conditional_entropy(x, a_bar, kernel, x_noise_var, a_bar_noise_var)
+def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):
+    e1 = conditional_entropy(x, a, gp, x_noise_var, a_noise_var)
+    e2 = conditional_entropy(x, a_bar, gp, x_noise_var, a_bar_noise_var)
     info = e1 - e2
     return info
 
@@ -126,31 +135,32 @@ def process_noise_var(dim, noise_var):
     return noise_var_
 
 
-def entropy(x, kernel, x_noise_var):
+def entropy(x, gp, x_noise_var):
     x_ = np.copy(x)
     if x.ndim == 1:
         x_ = x.reshape(-1, len(x))
 
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
-    cov = kernel(x_, x_) + x_noise_var_
+    cov = gp.cov_mat(x_, x_, x_noise_var_)
     d = cov.shape[0]
     ent = d*CONST + .5*np.log(np.linalg.det(cov))
     return ent
 
 
-def conditional_entropy(x, a, kernel, x_noise_var, a_noise_var, sigma_aa_inv=None):
+def conditional_entropy(x, a, gp, x_noise_var, a_noise_var, sigma_aa_inv=None):
+    # ipdb.set_trace()
     assert a.ndim == 2, 'Matrix A must be 2-dimensional!'
     if a.shape[0] == 0:
-        return entropy(x, kernel, x_noise_var)
+        return entropy(x, gp, x_noise_var)
 
     x_ = x.reshape(-1, a.shape[-1])
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
     a_noise_var_ = process_noise_var(a.shape[0], a_noise_var)
 
     if sigma_aa_inv is None:
-        sigma_aa_inv = np.linalg.inv(kernel(a, a) + a_noise_var_)
-    sigma_xa = kernel(x_, a)
-    sigma_xx = kernel(x_, x_) + x_noise_var_
+        sigma_aa_inv = np.linalg.inv(gp.cov_mat(a, a, a_noise_var_))
+    sigma_xa = gp.cov_mat(x_, a)
+    sigma_xx = gp.cov_mat(x_, x_, x_noise_var_)
     cov = sigma_xx - np.dot(np.dot(sigma_xa, sigma_aa_inv), sigma_xa.T)
     d = cov.shape[0]
     ent = d*CONST + .5*np.log(np.linalg.det(cov))

@@ -3,12 +3,13 @@ from sklearn.gaussian_process.kernels import RBF, Matern
 
 import torch
 import gpytorch
-from gpytorch.kernels import RBFKernel, IndexKernel
+from gpytorch.kernels import RBFKernel, WhiteNoiseKernel
 from gpytorch.means import ConstantMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
 import ipdb
+from utils import to_torch
 
 
 class SklearnGPR(object):
@@ -26,10 +27,6 @@ class SklearnGPR(object):
     def train_var(self):
         return self.model.alpha
 
-    @property
-    def kernel(self):
-        return self.model.kernel_
-
     def set_train_var(self, var):
         self.model.alpha = var
 
@@ -45,12 +42,23 @@ class SklearnGPR(object):
     def reset(self):
         self.model = gaussian_process.GaussianProcessRegressor(self.init_kernel)
 
+    def cov_mat(self, x1, x2, noise_var=None):
+        cov = self.model.kernel_(x1, x2)
+        if noise_var is not None:
+            cov = cov + noise_var
+        return cov
 
 class ExactManifoldGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, embed_dim=4):
+    def __init__(self, train_x, train_y, likelihood, embed_dim=4, var=None):
         super(ExactManifoldGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean(constant_bounds=(-1, 1))
-        self.covar_module = RBFKernel(log_lengthscale_bounds=(-5, 5))
+        self.rbf_covar_module = RBFKernel(log_lengthscale_bounds=(-5, 5))
+        if var is not None:
+            self.noise_covar_module = WhiteNoiseKernel(var)
+            self.covar_module = self.rbf_covar_module + self.noise_covar_module
+        else:
+            self.covar_module = self.rbf_covar_module
+
         feature_dim = train_x.size(0)
         self.fc = torch.nn.Linear(feature_dim, embed_dim)
 
@@ -65,10 +73,15 @@ class ExactManifoldGPModel(gpytorch.models.ExactGP):
     
     
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
+    def __init__(self, train_x, train_y, likelihood, var=None):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean(constant_bounds=(-1, 1))
-        self.covar_module = RBFKernel(log_lengthscale_bounds=(-5, 5))
+        self.mean_module = ConstantMean()
+        self.rbf_covar_module = RBFKernel()
+        if var is not None:
+            self.noise_covar_module = WhiteNoiseKernel(var)
+            self.covar_module = self.rbf_covar_module + self.noise_covar_module
+        else:
+            self.covar_module = self.rbf_covar_module
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -79,52 +92,85 @@ class ExactGPModel(gpytorch.models.ExactGP):
 class GpytorchGPR(object):
     def __init__(self, use_embed=False):
         self.use_embed = use_embed
-        self.train_x = None
-        self.train_y = None
+        self._train_x = None
+        self._train_y = None
+        self._train_var = None
         self.likelihood = None
         self.model = None
         self.optimizer = None
         self.mll = None
 
-    # @property
-    # def train_x(self):
-    #     return self._train_x
+    @property
+    def train_x(self):
+        return self._train_x.cpu().numpy()
 
+    @property
     def train_var(self):
-        pass
+        return self._train_var.cpu().numpy()
 
-    def reset(self, tx, ty, var):
-        # ipdb.set_trace()
-        # torch.manual_seed(0)
-        self.likelihood = GaussianLikelihood(log_noise_bounds=(-5, 5))
+    def reset(self, x, y, var):
+        self._train_x = torch.FloatTensor(x)
+        self._train_y = torch.FloatTensor(y)
+        if var is not None:
+            self._train_var = torch.FloatTensor(var)
+
+        self.likelihood = GaussianLikelihood()
         if self.use_embed:
-            self.model = ExactManifoldGPModel(tx.data, ty.data, self.likelihood)
+            self.model = ExactManifoldGPModel(
+                self._train_x, self._train_y, self.likelihood,
+                self._train_var)
         else:
-            self.model = ExactGPModel(tx.data, ty.data, self.likelihood)
-
-        self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=0.1)
-        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
-
-        self.train_x = tx
-        self.train_y = ty
+            self.model = ExactGPModel(
+                self._train_x, self._train_y, self.likelihood,
+                self._train_var)
+        self.optimizer = torch.optim.Adam(
+            [{'params': self.model.parameters()}, ], lr=0.1)
+        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
+            self.likelihood, self.model)
 
     def fit(self, x, y, var=None):
-        tx = torch.FloatTensor(x)
-        ty = torch.FloatTensor(y)
-        self.reset(tx, ty, var)
+        self.reset(x, y, var)
         self.model.train()
         self.likelihood.train()
 
-        training_iter = 500
+        training_iter = 100
         for i in range(training_iter):
             self.optimizer.zero_grad()
-            output = self.model(self.train_x)
-            loss = -self.mll(output, self.train_y)
+            output = self.model(self._train_x)
+            loss = -self.mll(output, self._train_y)
             loss.backward()
-            print('Iter %d/%d - Loss: %.3f   log_lengthscale: %.3f   log_noise: %.3f' % (
-                i + 1, training_iter, loss.data[0],
-                self.model.covar_module.log_lengthscale.data[0, 0],
-                self.model.likelihood.log_noise.data[0]
-            ))
+            # print('Iter %d/%d - Loss: %.3f   log_lengthscale: %.3f   log_noise: %.3f' % (
+            #     i + 1, training_iter, loss.data[0],
+            #     self.model.covar_module.log_lengthscale.data[0, 0],
+            #     self.model.likelihood.log_noise.data[0]
+            # ))
             self.optimizer.step()
-        
+
+    def cov_mat(self, x1, x2, white_noise=None):
+        x1_ = to_torch(x1)
+        x2_ = to_torch(x2)
+        # important to set model to eval mode
+        self.model.eval()
+        with torch.no_grad():
+            cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
+        # need to add white noise component here
+        if white_noise is not None:
+            cov = cov + white_noise
+        return cov
+
+    def predict(self, x, return_cov=True, return_std=False):
+        self.model.eval()
+        self.likelihood.eval()
+        x_ = to_torch(x)
+
+        with gpytorch.fast_pred_var() and torch.no_grad():
+            pred = self.likelihood(self.model(x_))
+            pred_mean = pred.mean().cpu().numpy()
+            if return_std:
+                std = pred.std().cpu().numpy()
+                return pred_mean, std
+            elif return_cov:
+                cov = pred.covar().evaluate().cpu().numpy()
+                return pred_mean, cov
+            else:
+                return pred_mean

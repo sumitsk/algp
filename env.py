@@ -10,8 +10,8 @@ class FieldEnv(object):
         super(FieldEnv, self).__init__()
 
         self.num_rows, self.num_cols = num_rows, num_cols
-        # self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
-        self.X, self.Y = generate_mixed_data(num_rows, num_cols)
+        self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
+        # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
         # Map of Field
         num_row_pass = 4

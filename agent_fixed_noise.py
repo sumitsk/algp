@@ -186,9 +186,8 @@ class Agent(object):
     #     return gp_indices[idx], map_poses[idx]
 
     def predict(self):
-        # specific to sklearn GPR
-        pred, sig = self.gp.predict(self.env.X, return_std=True)
-        return pred, sig**2
+        pred, std = self.gp.predict(self.env.X, return_std=True)
+        return pred, std**2
 
     def run_informative(self, render, iterations):
         if render:
@@ -337,11 +336,11 @@ class Agent(object):
         if self.utility_type == 'information_gain':
             unvisited_indices = np.where(self.visited == 0)[0]
             a_bar = self.env.X[unvisited_indices, :]
-            info = mi_change(x, a, a_bar, self.gp.kernel,
+            info = mi_change(x, a, a_bar, self.gp,
                              x_noise_var, a_noise_var,
                              a_bar_noise_var=None)
         elif self.utility_type == 'entropy':
-            info = conditional_entropy(x, a, self.gp.kernel,
+            info = conditional_entropy(x, a, self.gp,
                                        x_noise_var, a_noise_var)
         else:
             raise NotImplementedError
@@ -363,5 +362,6 @@ class Node(object):
 
 if __name__ == '__main__':
     env = FieldEnv(num_rows=10, num_cols=10)
+    # agent = Agent(env, model_type='gpytorch_GP')
     agent = Agent(env, model_type='sklearn_GP')
-    agent.run(render=True)  
+    agent.run(render=True)
