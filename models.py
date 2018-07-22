@@ -27,12 +27,16 @@ class SklearnGPR(object):
     def train_var(self):
         return self.model.alpha
 
+    @property
+    def kernel_(self):
+        return self.model.kernel_
+        
     def set_train_var(self, var):
         self.model.alpha = var
 
-    def fit(self, x, y, var):
+    def fit(self, x, y, var=None):
         self.reset()
-        self.set_train_var(var)
+        self.set_train_var(var if var is not None else 1e-10)
         self.model.fit(x, y)
 
     def predict(self, x, return_std=False, return_cov=False):
@@ -42,10 +46,10 @@ class SklearnGPR(object):
     def reset(self):
         self.model = gaussian_process.GaussianProcessRegressor(self.init_kernel)
 
-    def cov_mat(self, x1, x2, noise_var=None):
+    def cov_mat(self, x1, x2, white_noise=None):
         cov = self.model.kernel_(x1, x2)
-        if noise_var is not None:
-            cov = cov + noise_var
+        if white_noise is not None:
+            cov = cov + white_noise
         return cov
 
 class ExactManifoldGPModel(gpytorch.models.ExactGP):

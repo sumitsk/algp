@@ -3,7 +3,7 @@ import numpy as np
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from utils import mi_change, conditional_entropy, is_valid_cell
+from utils import mi_change, entropy_from_cov, conditional_entropy, is_valid_cell
 from env import FieldEnv
 from models import SklearnGPR, GpytorchGPR
 
@@ -16,22 +16,26 @@ class Agent(object):
         self.gp = None
         self._init_models()
 
-        self.camera_noise = 1.0
-        self.sensor_noise = 0.05
+        self._camera_noise = 1.0
+        self._sensor_noise = 0.05
         utility_types = ['entropy', 'information_gain']
         self.utility_type = utility_types[1]
         all_strategies = ['sensor_maximum_utility',
                           'camera_maximum_utility',
                           'informative']
-        self.strategy = all_strategies[2]
-        
-        self.visited = np.zeros(env.num_samples)
+        self._strategy = all_strategies[2]
+        var_methods = ['sum', 'max']
+        self._var_method = var_methods[1]
+
+        self._visited = np.full(env.num_samples, False)
         self.obs_y = np.zeros(env.num_samples)
         self.obs_var_inv = np.zeros(env.num_samples)
 
         self._pre_train(num_samples=5, only_sensor=True)
         self.agent_map_pose = (0, 0)
         self.search_radius = 10
+        self.mi_radius = 3
+        
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
         self.gp_update_every = 0
@@ -48,43 +52,49 @@ class Agent(object):
     def _pre_train(self, num_samples, only_sensor=False):
         ind = np.random.randint(0, self.env.num_samples, num_samples)
         if only_sensor:
-            self.add_samples(ind, self.sensor_noise)
+            self.add_samples(ind, self._sensor_noise)
         else:
-            self.add_samples(ind[:num_samples//2], self.camera_noise)
-            self.add_samples(ind[num_samples//2:], self.sensor_noise)
+            self.add_samples(ind[:num_samples//2], self._camera_noise)
+            self.add_samples(ind[num_samples//2:], self._sensor_noise)
         self.update_model()
         
     def add_samples(self, indices, noise):
         y = self.env.collect_samples(indices, noise)
         y_noise = np.full(len(indices), noise)
         self._handle_data(indices, y, y_noise)
-        self.visited[indices] = 1
+        self._visited[indices] = True
+
+    def _compute_new_var(self, var_inv, old_var_inv):
+        if self._var_method == 'sum':
+            return var_inv + old_var_inv
+        elif self._var_method == 'max':
+            return np.maximum(var_inv, old_var_inv)
+        else:
+            raise NotImplementedError
 
     def _handle_data(self, indices, y, var):
         var_inv = 1.0/np.array(var)
         old_obs = self.obs_y[indices]
         old_var_inv = self.obs_var_inv[indices]
         new_obs = (old_obs * old_var_inv + y * var_inv)/(old_var_inv + var_inv)
-        new_var_inv = var_inv + old_var_inv
-
+        new_var_inv = self._compute_new_var(var_inv, old_var_inv)
         self.obs_y[indices] = new_obs
         self.obs_var_inv[indices] = new_var_inv
 
     def update_model(self):
-        indices = np.where(self.visited == 1)[0]
-        x = self.env.X[indices, :]
-        var = 1.0/(self.obs_var_inv[indices])
-        y = self.obs_y[indices]
+        x = self.env.X[self._visited]
+        var = 1.0/(self.obs_var_inv[self._visited])
+        y = self.obs_y[self._visited]
         self.gp.fit(x, y, var)
 
     def run(self, render=False, iterations=40):
-        if self.strategy == 'sensor_maximum_utility':
+        if self._strategy == 'sensor_maximum_utility':
             raise NotImplementedError
             # self.step_max_utility('sensor', render, iterations)
-        elif self.strategy == 'camera_maximum_utility':
+        elif self._strategy == 'camera_maximum_utility':
             raise NotImplementedError
             # self.step_max_utility('camera', render, iterations)
-        elif self.strategy == 'informative':
+        elif self._strategy == 'informative':
             self.run_informative(render, iterations)
         else:
             raise NotImplementedError
@@ -162,10 +172,10 @@ class Agent(object):
     #     # Use entropy criteria for now
     #     if source == 'sensor':
     #         model = self.sensor_model
-    #         mask = np.copy(self.sensor_visited.flatten())
+    #         mask = np.copy(self.sensor__visited.flatten())
     #     elif source == 'camera':
     #         model = self.camera_model
-    #         mask = np.copy(self.camera_visited.flatten())
+    #         mask = np.copy(self.camera__visited.flatten())
     #     else:
     #         raise NotImplementedError
     #     a_ind = np.where(mask == 1)[0]
@@ -199,10 +209,10 @@ class Agent(object):
             next_node = self._bfs_search(self.agent_map_pose, self.search_radius)
             
             # add samples (camera and sensor)
-            self.add_samples(next_node.parents_index, self.camera_noise)
+            self.add_samples(next_node.parents_index, self._camera_noise)
             gp_index = self.env.map_pose_to_gp_index(next_node.map_pose)
             if gp_index is not None:
-                self.add_samples([gp_index], self.sensor_noise)
+                self.add_samples([gp_index], self._sensor_noise)
 
             # update GP model
             self.update_model()
@@ -261,94 +271,77 @@ class Agent(object):
                                     new_parents_index, new_path)
                     open_nodes.append(new_node)
 
+        mask = np.full(env.num_samples, False)
+        valid_indices = self.env.get_neighborhood(self.agent_map_pose, self.mi_radius)[1]
+        mask[valid_indices] = True
+
+        # ipdb.set_trace()
         # NOTE: computational bottleneck
-        # compute sensor and camera utility
-        # all_nodes_indices = []
-        # all_nodes_x_noise = []
+        all_nodes_indices = []
+        all_nodes_x_noise = []
         for node in closed_nodes:
             gp_index = self.env.map_pose_to_gp_index(node.map_pose)
             if gp_index is not None:
                 indices = node.parents_index + [gp_index]
-                x_noise = [self.camera_noise] * len(node.parents_index) + [self.sensor_noise]
+                x_noise = [self._camera_noise] * len(node.parents_index) + [self._sensor_noise]
             else:
                 indices = node.parents_index
-                x_noise = [self.camera_noise] * len(node.parents_index)
-            node.utility = self._get_utility(indices, x_noise)
-            # all_nodes_indices.append(indices)
-            # all_nodes_x_noise.append(x_noise)
-        # self._temp(map_pose, max_distance, all_nodes_indices, all_nodes_x_noise)
-        total_utility = [node.utility for node in closed_nodes]
-        best_node = closed_nodes[np.argmax(total_utility).item()]
+                x_noise = [self._camera_noise] * len(node.parents_index)
+            # node.utility = self._get_utility(indices, x_noise)
+            all_nodes_indices.append(indices)
+            all_nodes_x_noise.append(x_noise)
+        # total_utility = [node.utility for node in closed_nodes]
+        # best_node = closed_nodes[np.argmax(total_utility).item()]
+
+        # computing mutual information
+        # NOTE: this only needs to be computed after updating model once
+        cov = self.gp.cov_mat(self.env.X, self.env.X, white_noise=None)
+        info = []
+        for indices, noise in zip(all_nodes_indices, all_nodes_x_noise):
+            vis = np.copy(self._visited)
+            vis[indices] = True
+
+            var_inv = np.copy(self.obs_var_inv)
+            var_inv[indices] = self._compute_new_var(var_inv[indices], 1.0/np.array(noise))
+            unvis = ~vis
+            var_inv[unvis] = self._camera_noise
+
+            cov_a = cov[vis].T[vis].T
+            a_noise = 1.0/var_inv[vis]
+            # entropy of new A
+            e1 = entropy_from_cov(cov_a + np.diag(a_noise))
+
+            cov_a_bar = cov[unvis].T[unvis].T
+            a_bar_noise = 1.0/var_inv[unvis]
+            # NOTE: without noise term, the determinants of both the covariance
+            # matrices reduce to 0, also sensitive to noise
+            # entropy of new A_bar (V - A)
+            e2 = entropy_from_cov(cov_a_bar + np.diag(a_bar_noise))
+            # entropy of V
+            e3 = entropy_from_cov(cov + np.diag(1.0/var_inv))
+
+            info.append(e1 + e2 - e3)
+
+        # ipdb.set_trace()
+        best_node = closed_nodes[np.argmax(info).item()]
         return best_node
 
-    # this function is supposed to speed up utility computation by sharing info across
-    # all nodes and avoiding computing inverse all the time.
-    # BUG: det(cov) comes to be about 0. (remember: det are poorly scaled beasts)
-    # def _temp(self, map_pose, max_distance, nodes_indices, nodes_x_noise):
-    #     neighbor_map_poses, neighbor_gp_indices = self.env.get_neighborhood(map_pose, max_distance)
-    #
-    #     # specific to sklearn GPR
+    # @deprecated (implemented a faster way instead)
+    # def _get_utility(self, indices, x_noise_var):
+    #     x = self.env.X[indices, :]
     #     a = self.gp.train_x
-    #     a_noise = self.gp.train_var
-    #     kernel = self.gp.kernel
-    #     sigma_aa = kernel(a, a) + np.diag(a_noise)
-    #     sigma_aa_inv = np.linalg.inv(sigma_aa)
-    #
-    #     temp = np.copy(self.visited)
-    #     temp[neighbor_gp_indices] = 1
-    #     a_prime_indices = np.where(temp == 0)[0]
-    #     a_prime = self.env.X[a_prime_indices, :]
-    #     sigma_apap = kernel(a_prime, a_prime) + .05*np.eye(a_prime.shape[0])
-    #     sigma_apap_inv = np.linalg.inv(sigma_apap)
-    #
-    #     ipdb.set_trace()
-    #     info = []
-    #     for ind, var in zip(nodes_indices, nodes_x_noise):
-    #         y = self.env.X[ind, :]
-    #         e1 = conditional_entropy(y, a, kernel, var, a_noise, sigma_aa_inv)
-    #         ind2 = [x for x in neighbor_gp_indices if x not in ind]
-    #         y2 = self.env.X[ind2, :]
-    #         e2 = conditional_entropy(y2, a_prime, kernel, 0.05, 0, sigma_apap_inv)
-    #         ind3 = ind2 + ind
-    #         y3 = self.env.X[ind3, :]
-    #         e3 = conditional_entropy(y3, a_prime, kernel, 0.05, 0, sigma_apap_inv)
-    #         info.append(e1 + e2 - e3)
-    #     ipdb.set_trace()
-    #
-    # def plot_variance(self, source):
-    #     if source == 'camera':
-    #         mu, std = self.camera_model.predict(self.env.X, return_std=True)
-    #         var = (std ** 2).reshape(self.env.shape)
-    #     elif source == 'sensor':
-    #         mu, std = self.sensor_model.predict(self.env.X, return_std=True)
-    #         var = (std ** 2).reshape(self.env.shape)
+    #     a_noise_var = self.gp.train_var
+    #     if self.utility_type == 'information_gain':
+    #         a_bar = self.env.X[~self._visited]
+    #         info = mi_change(x, a, a_bar, self.gp,
+    #                          x_noise_var, a_noise_var,
+    #                          a_bar_noise_var=None)
+    #     elif self.utility_type == 'entropy':
+    #         info = conditional_entropy(x, a, self.gp,
+    #                                    x_noise_var, a_noise_var)
     #     else:
     #         raise NotImplementedError
-    #
-    #     plt.title(source + ' variance plot')
-    #     plt.imshow(var)
-    #     plt.show()
-
-    def _get_utility(self, indices, x_noise_var):
-        x = self.env.X[indices, :]
-        a = self.gp.train_x
-        a_noise_var = self.gp.train_var
-        if self.utility_type == 'information_gain':
-            unvisited_indices = np.where(self.visited == 0)[0]
-            a_bar = self.env.X[unvisited_indices, :]
-            info = mi_change(x, a, a_bar, self.gp,
-                             x_noise_var, a_noise_var,
-                             a_bar_noise_var=None)
-        elif self.utility_type == 'entropy':
-            info = conditional_entropy(x, a, self.gp,
-                                       x_noise_var, a_noise_var)
-        else:
-            raise NotImplementedError
-        return info
-
-    @property
-    def sampled_indices(self):
-        return np.where(self.visited == 1)[0]
+    #     return info
 
 
 class Node(object):
@@ -361,7 +354,7 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=10, num_cols=10)
-    # agent = Agent(env, model_type='gpytorch_GP')
-    agent = Agent(env, model_type='sklearn_GP')
+    env = FieldEnv(num_rows=20, num_cols=20)
+    agent = Agent(env, model_type='gpytorch_GP')
+    # agent = Agent(env, model_type='sklearn_GP')
     agent.run(render=True)

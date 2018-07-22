@@ -123,16 +123,30 @@ def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_v
 
 
 def process_noise_var(dim, noise_var):
+    # TODO: what should be the default noise?
     if noise_var is None:
         noise_var_ = 0.05
     elif isinstance(noise_var, int) or isinstance(noise_var, float):
         noise_var_ = noise_var * np.eye(dim)
-    elif isinstance(noise_var, list) or isinstance(noise_var, np.ndarray):
+    elif isinstance(noise_var, list):
         assert len(noise_var) == dim, 'Size mismatch!!'
         noise_var_ = np.diag(noise_var)
+    elif isinstance(noise_var, np.ndarray):
+        if noise_var.ndim == 1:
+            assert len(noise_var) == dim, 'Size mismatch!!'
+            noise_var_ = np.diag(noise_var)
+        elif noise_var.ndim == 2:
+            assert noise_var.shape[0] == noise_var.shape[1] == dim, 'Size mismatch'
+            noise_var_ = noise_var
     else:
         raise NotImplementedError
     return noise_var_
+
+
+def entropy_from_cov(cov):
+    d = cov.shape[0]
+    ent = d * CONST + .5 * np.log(np.linalg.det(cov))
+    return ent
 
 
 def entropy(x, gp, x_noise_var):
@@ -140,6 +154,7 @@ def entropy(x, gp, x_noise_var):
     if x.ndim == 1:
         x_ = x.reshape(-1, len(x))
 
+    # NOTE: because of noise term, even if there are repeated enteries, the det is not 0
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
     cov = gp.cov_mat(x_, x_, x_noise_var_)
     d = cov.shape[0]
