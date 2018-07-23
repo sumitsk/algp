@@ -8,6 +8,7 @@ from gpytorch.means import ConstantMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
+import numpy as np
 import ipdb
 from utils import to_torch
 
@@ -51,6 +52,7 @@ class SklearnGPR(object):
         if white_noise is not None:
             cov = cov + white_noise
         return cov
+
 
 class ExactManifoldGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, embed_dim=4, var=None):
@@ -138,17 +140,19 @@ class GpytorchGPR(object):
         self.likelihood.train()
 
         training_iter = 100
+        last_loss = 0
+        loss_change = []
         for i in range(training_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
             loss = -self.mll(output, self._train_y)
             loss.backward()
-            # print('Iter %d/%d - Loss: %.3f   log_lengthscale: %.3f   log_noise: %.3f' % (
-            #     i + 1, training_iter, loss.data[0],
-            #     self.model.covar_module.log_lengthscale.data[0, 0],
-            #     self.model.likelihood.log_noise.data[0]
-            # ))
             self.optimizer.step()
+            delta = loss.item() - last_loss
+            loss_change.append(abs(delta))
+            if np.mean(loss_change[max(0, i-10):i+1]) < .01:
+                break
+            last_loss = loss.item()
 
     def cov_mat(self, x1, x2, white_noise=None):
         x1_ = to_torch(x1)
@@ -157,7 +161,7 @@ class GpytorchGPR(object):
         self.model.eval()
         with torch.no_grad():
             cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
-        # need to add white noise component here
+        # add white noise component here
         if white_noise is not None:
             cov = cov + white_noise
         return cov
