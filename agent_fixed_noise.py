@@ -34,8 +34,9 @@ class Agent(object):
         self._pre_train(num_samples=5, only_sensor=True)
         self.agent_map_pose = (0, 0)
         self.search_radius = 10
-        self.mi_radius = 3
-        
+        self.mi_radius = self.search_radius*3
+        # self.mi_radius = np.inf
+
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
         self.gp_update_every = 0
@@ -271,11 +272,6 @@ class Agent(object):
                                     new_parents_index, new_path)
                     open_nodes.append(new_node)
 
-        mask = np.full(env.num_samples, False)
-        valid_indices = self.env.get_neighborhood(self.agent_map_pose, self.mi_radius)[1]
-        mask[valid_indices] = True
-
-        # ipdb.set_trace()
         # NOTE: computational bottleneck
         all_nodes_indices = []
         all_nodes_x_noise = []
@@ -294,35 +290,58 @@ class Agent(object):
         # best_node = closed_nodes[np.argmax(total_utility).item()]
 
         # computing mutual information
+        if self.mi_radius > np.prod(self.env.map.shape):
+            v_ind = list(range(self.env.num_samples))
+        else:
+            v_ind = self.env.get_neighborhood(self.agent_map_pose, self.mi_radius)[1]
+        # these indices have to be excluded for mi computation
+        rest = list(set(np.arange(self.env.num_samples)) - set(v_ind))
+
         # NOTE: this only needs to be computed after updating model once
-        cov = self.gp.cov_mat(self.env.X, self.env.X, white_noise=None)
+        v = self.env.X[v_ind, :]
+        # cov = self.gp.cov_mat(self.env.X, self.env.X, white_noise=None)
+        cov_v = self.gp.cov_mat(v, v, white_noise=None)
         info = []
+        # ipdb.set_trace()
+
         for indices, noise in zip(all_nodes_indices, all_nodes_x_noise):
+            var_inv = np.copy(self.obs_var_inv)
+            var_inv[indices] = self._compute_new_var(var_inv[indices], 1.0 / np.array(noise))
+            var_inv_v = var_inv[v_ind]
+
             vis = np.copy(self._visited)
             vis[indices] = True
+            vis[rest] = False
 
-            var_inv = np.copy(self.obs_var_inv)
-            var_inv[indices] = self._compute_new_var(var_inv[indices], 1.0/np.array(noise))
-            unvis = ~vis
-            var_inv[unvis] = self._camera_noise
+            # cov_a = cov[vis].T[vis].T
+            # a_noise = 1.0/var_inv[vis]
+            cov_a = cov_v[vis[v_ind]].T[vis[v_ind]].T
+            a_noise = 1.0/var_inv_v[vis[v_ind]]
 
-            cov_a = cov[vis].T[vis].T
-            a_noise = 1.0/var_inv[vis]
             # entropy of new A
             e1 = entropy_from_cov(cov_a + np.diag(a_noise))
 
-            cov_a_bar = cov[unvis].T[unvis].T
-            a_bar_noise = 1.0/var_inv[unvis]
+            vis[rest] = True
+            unvis = ~vis
+            # var_inv[unvis] = self._camera_noise
+            # cov_a_bar = cov[unvis].T[unvis].T
+            # a_bar_noise = 1.0/var_inv[unvis]
+            var_inv_v[unvis[v_ind]] = self._camera_noise
+            cov_a_bar = cov_v[unvis[v_ind]].T[unvis[v_ind]].T
+            a_bar_noise = 1.0/var_inv_v[unvis[v_ind]]
+
             # NOTE: without noise term, the determinants of both the covariance
             # matrices reduce to 0, also sensitive to noise
             # entropy of new A_bar (V - A)
             e2 = entropy_from_cov(cov_a_bar + np.diag(a_bar_noise))
             # entropy of V
-            e3 = entropy_from_cov(cov + np.diag(1.0/var_inv))
+            # cov_v = cov[v_ind, :][:, v_ind]
+            # v_noise = 1.0/var_inv[v_ind]
+            v_noise = 1.0/var_inv_v
+            e3 = entropy_from_cov(cov_v + np.diag(v_noise))
 
             info.append(e1 + e2 - e3)
 
-        # ipdb.set_trace()
         best_node = closed_nodes[np.argmax(info).item()]
         return best_node
 
@@ -354,7 +373,7 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=20, num_cols=20)
+    env = FieldEnv(num_rows=20, num_cols=40)
     agent = Agent(env, model_type='gpytorch_GP')
     # agent = Agent(env, model_type='sklearn_GP')
     agent.run(render=True)

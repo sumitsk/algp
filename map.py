@@ -26,10 +26,15 @@ class Map(object):
         # 1 if obstacle 0 otherwise
         self.oc_grid = self.build_oc_grid()
 
-        # all poses (x,y) in the map (used
-        x, y = np.meshgrid(np.arange(n_rows), np.arange(n_cols))
+        # all poses (x,y) in the map
+
+        x, y = np.meshgrid(np.arange(self.oc_grid_shape[1]), np.arange(self.oc_grid_shape[0]))
         self.all_poses = np.vstack([y.flatten(), x.flatten()]).T
-        
+
+    @property
+    def shape(self):
+        return self.oc_grid_shape
+
     def build_oc_grid(self):
         # generates the occupancy grid
         grid = np.zeros(self.oc_grid_shape)

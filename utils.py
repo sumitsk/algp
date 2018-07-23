@@ -24,7 +24,7 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, alg
     :param algo: sum / max of mixture of Gaussians
     :return:
     """
-    x, y = np.meshgrid(np.arange(num_rows), np.arange(num_cols))
+    x, y = np.meshgrid(np.arange(num_cols), np.arange(num_rows))
     grid = np.vstack([y.flatten(), x.flatten()]).transpose()
 
     means_x = np.random.uniform(0, num_rows, size=k)
@@ -45,7 +45,7 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, alg
 
 
 def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2, algo='sum'):
-    x, y = np.meshgrid(np.arange(num_rows), np.arange(num_cols))
+    x, y = np.meshgrid(np.arange(num_cols), np.arange(num_rows))
     grid = np.vstack([y.flatten(), x.flatten()]).transpose()
     n = num_rows * num_cols
     z_ind = np.random.randint(0, num_zs, n)
