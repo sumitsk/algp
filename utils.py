@@ -1,6 +1,7 @@
 import numpy as np
 import ipdb
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import torch
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
@@ -154,9 +155,42 @@ def vec_to_one_hot_matrix(vec, max_val=None):
 
 def zero_mean_unit_variance(data, mean=None, std=None):
     # zero mean unit variance normalization
-    if mean is not None:
+    if mean is None:
         mean = data.mean(axis=0)
-    if std is not None:
+    if std is None:
         std = data.std(axis=0)
     return (data - mean) / std
 
+
+def draw_plots(num_rows, num_cols, true_y, pred_y, pred_var,
+               title=None, fig=None, ax=None):
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+        axt, axp, axv = ax
+
+    axt.set_title('Ground truth')
+    imt = axt.imshow(true_y.reshape(num_rows, num_cols),
+                     cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
+    div = make_axes_locatable(axt)
+    caxt = div.new_horizontal(size='5%', pad=.05)
+    fig.add_axes(caxt)
+    fig.colorbar(imt, caxt, orientation='vertical')
+
+    axp.set_title('Predicted values')
+    imp = axp.imshow(pred_y.reshape(num_rows, num_cols),
+                     cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
+    divm = make_axes_locatable(axp)
+    caxp = divm.new_horizontal(size='5%', pad=.05)
+    fig.add_axes(caxp)
+    fig.colorbar(imp, caxp, orientation='vertical')
+
+    axv.set_title('Variance')
+    imv = axv.imshow(pred_var.reshape(num_rows, num_cols), cmap='hot')
+    divv = make_axes_locatable(axv)
+    caxv = divv.new_horizontal(size='5%', pad=.05)
+    fig.add_axes(caxv)
+    fig.colorbar(imv, caxv, orientation='vertical')
+
+    if title is not None:
+        fig.suptitle(title)
+    return fig

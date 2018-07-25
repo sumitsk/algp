@@ -12,7 +12,7 @@ from gpytorch.random_variables import GaussianRandomVariable
 
 import numpy as np
 import ipdb
-from utils import to_torch, zero_mean_unit_variance
+from utils import to_torch
 
 
 def weights_init(m):
@@ -24,12 +24,15 @@ def weights_init(m):
 
 
 class SklearnGPR(object):
-    def __init__(self):
-        self.init_kernel = RBF(length_scale=1.0)
+    def __init__(self, kernel=None):
+        if kernel == 'rbf' or kernel is None:
+            self.init_kernel = RBF(length_scale=1.0)
+        elif kernel == 'matern':
+            self.init_kernel = Matern(nu=1.5, length_scale=1.0)
+        else:
+            raise NotImplementedError
         self.model = None
-        # model is initialised in the reset method
-        # self.reset()
-        
+
     @property
     def train_x(self):
         return self.model.X_train_
@@ -63,113 +66,100 @@ class SklearnGPR(object):
             cov = cov + white_noise
         return cov
 
-
-class ExactManifoldGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None):
-        super(ExactManifoldGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean(constant_bounds=(-1, 1))
-        self.rbf_covar_module = RBFKernel(log_lengthscale_bounds=(-5, 5))
-        if var is not None:
-            self.noise_covar_module = WhiteNoiseKernel(var)
-            self.covar_module = self.rbf_covar_module + self.noise_covar_module
-        else:
-            self.covar_module = self.rbf_covar_module
-
-        feature_dim = train_x.size(1)
-        embed_dim = 4
-        self.fc = torch.nn.Linear(feature_dim, embed_dim)
-
-    def _fwd(self, x):
-        return self.fc(x)
-
-    def forward(self, x):
-        x = self._fwd(x)
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return GaussianRandomVariable(mean_x, covar_x)
-    
     
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None):
+    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, **kwargs):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean()
         self.rbf_covar_module = RBFKernel()
+        
+        # set covariance module
         if var is not None:
             self.noise_covar_module = WhiteNoiseKernel(var)
             self.covar_module = self.rbf_covar_module + self.noise_covar_module
         else:
             self.covar_module = self.rbf_covar_module
+        self._set_latent_function(latent, **kwargs) 
 
-    def forward(self, x):
+    def _set_latent_function(self, latent, **kwargs):
+        if latent is None or latent == 'identity':
+            self.latent_func = IdentityLatentFunction()
+        elif latent == 'linear':
+            self.latent_func = LinearLatentFunction(**kwargs)
+        elif latent == 'non_linear':
+            self.latent_func = NonLinearLatentFunction(**kwargs)
+        elif latent == 'field':
+            self.latent_func = FieldLatentFunction(**kwargs)
+        else:
+            raise NotImplementedError
+
+    def forward(self, inp):
+        x = self.latent_func(inp)
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return GaussianRandomVariable(mean_x, covar_x)
 
 
-class FieldGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None):
-        super(FieldGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean()
-        self.rbf_covar_module = RBFKernel()
-        if var is not None:
-            self.noise_covar_module = WhiteNoiseKernel(var)
-            self.covar_module = self.rbf_covar_module + self.noise_covar_module
-        else:
-            self.covar_module = self.rbf_covar_module
-
-        # assuming variety starts from the 3rd dimension
-        self.rr_dim = 2
-        self.v_dim = train_x.size(-1) - self.rr_dim
-        f1_dim = 3
-        f2_dim = 3
-        self.rr_fc = torch.nn.Linear(self.rr_dim, f1_dim)
-        self.v_fc = torch.nn.Linear(self.v_dim, f1_dim)
-        self.fc = torch.nn.Linear(2*f1_dim, f2_dim)
+class IdentityLatentFunction(nn.Module):
+    def __init__(self):
+        super(IdentityLatentFunction, self).__init__()
         self.apply(weights_init)
 
-    def _fwd(self, inp):
+    def forward(self, x):
+        return x
+
+
+class LinearLatentFunction(nn.Module):
+    def __init__(self, input_dim, embed_dim):
+        super(LinearLatentFunction, self).__init__()
+        self.fc = nn.Linear(input_dim, embed_dim)
+        # self.apply(weights_init)
+
+    def forward(self, x):
+        return self.fc(x)
+
+
+class NonLinearLatentFunction(nn.Module):
+    def __init__(self, input_dim):
+        super(NonLinearLatentFunction, self).__init__()
+        f1_dim = 2
+        f2_dim = 2
+        self.fc1 = nn.Linear(input_dim, f1_dim)
+        self.fc2 = nn.Linear(f1_dim, f2_dim)
+        # self.apply(weights_init)
+
+    def forward(self, inp):
+        x = F.relu(self.fc1(inp))
+        x = self.fc2(x)
+        return x
+
+
+class FieldLatentFunction(nn.Module):
+    def __init__(self, rr_dim, v_dim):
+        super(FieldLatentFunction, self).__init__()
+        self.rr_dim = rr_dim
+        self.v_dim = v_dim
+        f1_dim = 3
+        f2_dim = 3
+        # NOTE: it may not be a good idea to perform transformation of rr dimensions
+        self.rr_fc = nn.Linear(self.rr_dim, f1_dim)
+        self.v_fc = nn.Linear(self.v_dim, f1_dim)
+        self.fc = nn.Linear(2*f1_dim, f2_dim)
+        # self.apply(weights_init)
+
+    def forward(self, inp):
+        # TODO: perhaps too many parameters (might overfit)
         inp1, inp2 = torch.split(inp, [self.rr_dim, self.v_dim], dim=-1)
-        x1 = F.tanh(self.rr_fc(inp1))
-        x2 = F.tanh(self.v_fc(inp2))
+        x1 = F.relu(self.rr_fc(inp1))
+        x2 = F.relu(self.v_fc(inp2))
         x = torch.cat([x1, x2], dim=-1)
         x = self.fc(x)
         return x
 
-    def forward(self, inp):
-        x = self._fwd(inp)
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return GaussianRandomVariable(mean_x, covar_x)
 
-
-# class LatentFunction(nn.Module):
-#     def __init__(self, rr_dim, v_dim):
-#         super(LatentFunction, self).__init__()
-#         self.rr_dim = rr_dim
-#         self.v_dim = v_dim
-#         f1_dim = 3
-#         f2_dim = 3
-#         self.rr_fc = torch.nn.Linear(self.rr_dim, f1_dim)
-#         self.v_fc = torch.nn.Linear(self.v_dim, f1_dim)
-#         self.fc = torch.nn.Linear(2*f1_dim, f2_dim)
-#
-#     def forward(self, inp):
-#         # todo: perhaps too many parameters (might overfit)
-#         inp1, inp2 = torch.split(inp, [self.rr_dim, self.v_dim], dim=-1)
-#         x1 = F.tanh(self.rr_fc(inp1))
-#         x2 = F.tanh(self.v_fc(inp2))
-#         x = torch.cat([x1, x2], dim=-1)
-#         x = self.fc(x)
-#         return x
-
-
-# class GP(gpytorch.Module):
-
-
-# todo: try batchnorm and lr scheduler 
+# TODO: try batchnorm and lr scheduler
 class GpytorchGPR(object):
-    def __init__(self, use_embed=True):
-        self.use_embed = use_embed
+    def __init__(self, latent=None, lr=.1):
         self._train_x = None
         self._train_y = None
         self._train_var = None
@@ -177,6 +167,9 @@ class GpytorchGPR(object):
         self.model = None
         self.optimizer = None
         self.mll = None
+        self.lr = lr
+        self.latent = latent
+        self.latent_func = None
 
     @property
     def train_x(self):
@@ -186,49 +179,35 @@ class GpytorchGPR(object):
     def train_var(self):
         return self._train_var.cpu().numpy()
 
-    def reset(self, x, y, var):
+    def reset(self, x, y, var, **kwargs):
         self._train_x = torch.FloatTensor(x)
         self._train_y = torch.FloatTensor(y)
         if var is not None:
             self._train_var = torch.FloatTensor(var)
 
         self.likelihood = GaussianLikelihood()
-        if self.use_embed:
-            # self.model = ExactManifoldGPModel(
-            #     self._train_x, self._train_y, self.likelihood,
-            #     self._train_var)
-            self.model = FieldGPModel(self._train_x, self._train_y,
-                                      self.likelihood, self._train_var)
-        else:
-            self.model = ExactGPModel(
-                self._train_x, self._train_y, self.likelihood,
-                self._train_var)
+        self.model = ExactGPModel(self._train_x, self._train_y,
+                                  self.likelihood, self._train_var,
+                                  self.latent, **kwargs)
 
         self.optimizer = torch.optim.Adam(
-            [{'params': self.model.parameters()}, ], lr=0.01)
+            [{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
             self.likelihood, self.model)
 
-    def normalize_x(self, x):
-        x_ = np.copy(x)
-        x_[:, 0] /= 15
-        x_[:, 1] /= 37
-        return x_
-
-    def fit(self, x, y, var=None):
-        # ipdb.set_trace()
-        x_ = self.normalize_x(x)
-        self.reset(x_, y, var)
+    def fit(self, x, y, var=None, **kwargs):
+        self.reset(x, y, var, **kwargs)
         self.model.train()
         self.likelihood.train()
 
         training_iter = 1000
         last_loss = 0
         loss_change = []
+        # TODO: High priority (implement a robust convergence condition)
         for i in range(training_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
-            loss = -self.mll(output, self._train_y)
+            loss = -self.mll(output, self._train_y)/len(y)
             loss.backward()
             self.optimizer.step()
             delta = loss.item() - last_loss
@@ -254,8 +233,7 @@ class GpytorchGPR(object):
     def predict(self, x, return_cov=True, return_std=False):
         self.model.eval()
         self.likelihood.eval()
-        x_ = self.normalize_x(x)
-        x_ = to_torch(x_)
+        x_ = to_torch(x)
 
         with gpytorch.fast_pred_var() and torch.no_grad():
             pred = self.likelihood(self.model(x_))
