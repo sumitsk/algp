@@ -1,26 +1,37 @@
 import numpy as np
 import ipdb
+import pickle
 
 from map import Map
-from utils import generate_gaussian_data, generate_mixed_data
 
 
 class FieldEnv(object):
-    def __init__(self, num_rows=40, num_cols=40):
+    def __init__(self, num_rows=15, num_cols=15, data_file=None):
         super(FieldEnv, self).__init__()
 
-        self.num_rows, self.num_cols = num_rows, num_cols
-        # self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
-        self.X, self.Y = generate_mixed_data(num_rows, num_cols)
+        if data_file is None:
+            from utils import generate_gaussian_data  # , generate_mixed_data
+            self.num_rows, self.num_cols = num_rows, num_cols
+            self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
+            # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
-        # Map of Field
-        num_row_pass = 4
-        assert num_rows % (num_row_pass + 1) == 0, 'Infeasible row setting'
-        self.map = Map(num_rows, num_cols, num_row_pass, row_pass_width=1)
+        else:
+            self._load_data(data_file)
+
+        # Occupancy map of the field
+        self.map = Map(self.num_rows, self.num_cols)
 
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         return y
+
+    def _load_data(self, filename):
+        with open(filename, 'rb') as fn:
+            data_dict = pickle.load(fn)
+        self.num_rows = data_dict['num_rows']
+        self.num_cols = data_dict['num_cols']
+        self.X = data_dict['X']
+        self.Y = data_dict['Y'].squeeze()
 
     @property
     def shape(self):
@@ -36,7 +47,7 @@ class FieldEnv(object):
         return map_pose
 
     def map_pose_to_gp_index(self, map_pose):
-        assert isinstance(map_pose, tuple), 'Map pose should be a tuple'
+        assert isinstance(map_pose, tuple), 'Map pose must be a tuple'
         gp_pose = self.map.map_pose_to_gp_pose(map_pose)
         if gp_pose is None:
             return None

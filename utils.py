@@ -73,46 +73,7 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
             y = np.maximum(y, tmp)
         elif algo == 'sum':
             y += tmp
-    # plt.imshow(y.reshape(num_rows, num_cols))
-    # plt.show()
-    # ipdb.set_trace()
     return grid, y
-
-
-# @deprecated
-# def conditional_entropy(x, model):
-#     """
-#     compute entropy of set x conditioned on the training set of GP model
-#     :param x: test locations
-#     :param model: GP model
-#     :return: H(x| model.X_train_)
-#     """
-#
-#     dim = model.X_train_.shape[-1]
-#     x_ = x.reshape(-1, dim)
-#     mu, cov = model.predict(x_, return_cov=True)
-#     d = cov.shape[0]
-#     ent = d*CONST + .5*np.log(np.linalg.det(cov))
-#     return ent
-
-# @deprecated
-# def mutual_information(x, model):
-#     """
-#     compute mutual information between set X and training set of GP model
-#     :param x: test locations
-#     :param model: GP model
-#     :return: MI(x, model.X_train_)
-#     """
-#
-#     dim = model.X_train_.shape[-1]
-#     x_ = x.reshape(-1, dim)
-#     # todo: should noise be added too ?
-#     cov = model.gp_(x_, x_)  # + model.alpha * np.eye(x_.shape[0])
-#     d = cov.shape[0]
-#     ent = d*CONST + .5*np.log(np.linalg.det(cov))
-#     cond_ent = conditional_entropy(x, model)
-#     mi = ent - cond_ent
-#     return mi
 
 
 def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):
@@ -123,7 +84,7 @@ def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_v
 
 
 def process_noise_var(dim, noise_var):
-    # TODO: what should be the default noise?
+    # using a default noise of .05 (camera noise)
     if noise_var is None:
         noise_var_ = 0.05
     elif isinstance(noise_var, int) or isinstance(noise_var, float):
@@ -154,16 +115,13 @@ def entropy(x, gp, x_noise_var):
     if x.ndim == 1:
         x_ = x.reshape(-1, len(x))
 
-    # NOTE: because of noise term, even if there are repeated enteries, the det is not 0
+    # NOTE: because of noise term, even if there are repeated entries, the det is not 0
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
     cov = gp.cov_mat(x_, x_, x_noise_var_)
-    d = cov.shape[0]
-    ent = d*CONST + .5*np.log(np.linalg.det(cov))
-    return ent
+    return entropy_from_cov(cov)
 
 
 def conditional_entropy(x, a, gp, x_noise_var, a_noise_var, sigma_aa_inv=None):
-    # ipdb.set_trace()
     assert a.ndim == 2, 'Matrix A must be 2-dimensional!'
     if a.shape[0] == 0:
         return entropy(x, gp, x_noise_var)
@@ -177,9 +135,7 @@ def conditional_entropy(x, a, gp, x_noise_var, a_noise_var, sigma_aa_inv=None):
     sigma_xa = gp.cov_mat(x_, a)
     sigma_xx = gp.cov_mat(x_, x_, x_noise_var_)
     cov = sigma_xx - np.dot(np.dot(sigma_xa, sigma_aa_inv), sigma_xa.T)
-    d = cov.shape[0]
-    ent = d*CONST + .5*np.log(np.linalg.det(cov))
-    return ent
+    return entropy_from_cov(cov)
 
 
 def is_valid_cell(cell, grid_shape):
@@ -188,5 +144,19 @@ def is_valid_cell(cell, grid_shape):
     return False
 
 
-if __name__ == '__main__':
-    data = generate_mixed_data(15, 15, 4)
+def vec_to_one_hot_matrix(vec, max_val=None):
+    if max_val is None:
+        max_val = np.max(vec)
+    mat = np.zeros((len(vec), max_val+1))
+    mat[np.arange(len(vec)), vec] = 1
+    return mat
+
+
+def zero_mean_unit_variance(data, mean=None, std=None):
+    # zero mean unit variance normalization
+    if mean is not None:
+        mean = data.mean(axis=0)
+    if std is not None:
+        std = data.std(axis=0)
+    return (data - mean) / std
+

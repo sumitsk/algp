@@ -2,6 +2,7 @@ import ipdb
 import numpy as np
 from copy import deepcopy
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from utils import mi_change, entropy_from_cov, conditional_entropy, is_valid_cell
 from env import FieldEnv
@@ -31,11 +32,11 @@ class Agent(object):
         self.obs_y = np.zeros(env.num_samples)
         self.obs_var_inv = np.zeros(env.num_samples)
 
-        self._pre_train(num_samples=5, only_sensor=True)
+        self._pre_train(num_samples=20, only_sensor=True)
         self.agent_map_pose = (0, 0)
         self.search_radius = 10
-        self.mi_radius = self.search_radius*3
-        # self.mi_radius = np.inf
+        # self.mi_radius = self.search_radius*3
+        self.mi_radius = np.inf
 
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
@@ -46,7 +47,7 @@ class Agent(object):
         if self.gp_type == 'sklearn_GP':
             self.gp = SklearnGPR()
         elif self.gp_type == 'gpytorch_GP':
-            self.gp = GpytorchGPR()
+            self.gp = GpytorchGPR(use_embed=True)
         else:
             raise NotImplementedError
 
@@ -114,20 +115,30 @@ class Agent(object):
         ax.set_title('Environment')
         ax.imshow(plot)
 
-    def render(self, ax, pred, var):
+    def render(self, fig, ax, pred, var):
         # render path
         self._render_path(ax[0, 0])
 
+        # ipdb.set_trace()
+
         # render plots
         axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
-        axt.set_title('True values')
-        axt.imshow(self.env.Y.reshape(self.env.shape))
+        axt.set_title('Ground Truth')
+        imt = axt.imshow(self.env.Y.reshape(self.env.shape))
+        div = make_axes_locatable(axt)
+        caxt = div.new_horizontal(size='5%', pad=.05)
+        # fig.add_axes(caxt)
+        # fig.colorbar(imt, caxt, orientation='vertical')
 
         axp.set_title('Predicted values')
-        axp.imshow(pred.reshape(self.env.shape))
+        imp = axp.imshow(pred.reshape(self.env.shape))
+        divm = make_axes_locatable(axp)
+        caxp = divm.new_horizontal(size='5%', pad=.05)
+        # fig.add_axes(caxp)
+        # fig.colorbar(imp, caxp, orientation='vertical')
 
         axv.set_title('Variance')
-        axv.imshow(var.reshape(self.env.shape))
+        imv = axv.imshow(var.reshape(self.env.shape))
 
     # def maximum_entropy(self, source):
     #     if source == 'sensor':
@@ -203,7 +214,7 @@ class Agent(object):
     def run_informative(self, render, iterations):
         if render:
             plt.ion()
-            f, ax = plt.subplots(2, 2, figsize=(12, 8))
+            fig, ax = plt.subplots(2, 2, figsize=(12, 8))
 
         for i in range(iterations):
             # find next node to visit
@@ -226,13 +237,15 @@ class Agent(object):
                     [self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
 
             pred, var = self.predict()
-            if np.mean(var) < .01:
-                print('Converged')
-                break
+            # if np.max(var) < .01:
+            #     print('Converged')
+            #     break
 
             if render:
-                self.render(ax, pred, var)
+                # fig.clf()
+                self.render(fig, ax, pred, var)
                 plt.pause(.1)
+                # plt.show()
         ipdb.set_trace()
 
     def _bfs_search(self, map_pose, max_distance):
@@ -261,6 +274,11 @@ class Agent(object):
                         self.env.map.oc_grid[new_map_pose] != 1 and \
                         new_gval < gvals[new_map_pose]:
                     gvals[new_map_pose] = new_gval
+
+                    # directional BFS (can't move in the opposite direction)
+                    # do not expand nodes in the opposite direction
+                    if len(self.path) > 2 and node.map_pose == self.agent_map_pose and new_map_pose == tuple(self.path[-2]):
+                            continue
 
                     if gp_index is None:
                         new_parents_index = node.parents_index
@@ -302,7 +320,6 @@ class Agent(object):
         # cov = self.gp.cov_mat(self.env.X, self.env.X, white_noise=None)
         cov_v = self.gp.cov_mat(v, v, white_noise=None)
         info = []
-        # ipdb.set_trace()
 
         for indices, noise in zip(all_nodes_indices, all_nodes_x_noise):
             var_inv = np.copy(self.obs_var_inv)
@@ -373,7 +390,8 @@ class Node(object):
 
 
 if __name__ == '__main__':
-    env = FieldEnv(num_rows=20, num_cols=40)
+    data_file = 'data/plant_width_mean_dataset.pkl'
+    env = FieldEnv(data_file=data_file)
     agent = Agent(env, model_type='gpytorch_GP')
     # agent = Agent(env, model_type='sklearn_GP')
     agent.run(render=True)
