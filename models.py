@@ -15,6 +15,14 @@ import ipdb
 from utils import to_torch, zero_mean_unit_variance
 
 
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1 or classname.find('Linear') != -1:
+        nn.init.orthogonal_(m.weight.data)
+        if m.bias is not None:
+            m.bias.data.fill_(0)
+
+
 class SklearnGPR(object):
     def __init__(self):
         self.init_kernel = RBF(length_scale=1.0)
@@ -117,6 +125,7 @@ class FieldGPModel(gpytorch.models.ExactGP):
         self.rr_fc = torch.nn.Linear(self.rr_dim, f1_dim)
         self.v_fc = torch.nn.Linear(self.v_dim, f1_dim)
         self.fc = torch.nn.Linear(2*f1_dim, f2_dim)
+        self.apply(weights_init)
 
     def _fwd(self, inp):
         inp1, inp2 = torch.split(inp, [self.rr_dim, self.v_dim], dim=-1)
@@ -157,8 +166,7 @@ class FieldGPModel(gpytorch.models.ExactGP):
 # class GP(gpytorch.Module):
 
 
-
-
+# todo: try batchnorm and lr scheduler 
 class GpytorchGPR(object):
     def __init__(self, use_embed=True):
         self.use_embed = use_embed
@@ -185,34 +193,36 @@ class GpytorchGPR(object):
             self._train_var = torch.FloatTensor(var)
 
         self.likelihood = GaussianLikelihood()
-        # if self.use_embed:
-        #     self.model = ExactManifoldGPModel(
-        #         self._train_x, self._train_y, self.likelihood,
-        #         self._train_var)
-        # else:
-        #     self.model = ExactGPModel(
-        #         self._train_x, self._train_y, self.likelihood,
-        #         self._train_var)
-        # self.model = FieldGPModel(self._train_x, self._train_y,
-        #                           self.likelihood, self._train_var)
-        self.model = ExactManifoldGPModel(
-            self._train_x, self._train_y, self.likelihood,
-            self._train_var)
+        if self.use_embed:
+            # self.model = ExactManifoldGPModel(
+            #     self._train_x, self._train_y, self.likelihood,
+            #     self._train_var)
+            self.model = FieldGPModel(self._train_x, self._train_y,
+                                      self.likelihood, self._train_var)
+        else:
+            self.model = ExactGPModel(
+                self._train_x, self._train_y, self.likelihood,
+                self._train_var)
 
         self.optimizer = torch.optim.Adam(
             [{'params': self.model.parameters()}, ], lr=0.01)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
             self.likelihood, self.model)
 
+    def normalize_x(self, x):
+        x_ = np.copy(x)
+        x_[:, 0] /= 15
+        x_[:, 1] /= 37
+        return x_
+
     def fit(self, x, y, var=None):
         # ipdb.set_trace()
-        x[:, 0] /= 15
-        x[:, 1] /= 37
-        self.reset(x, y, var)
+        x_ = self.normalize_x(x)
+        self.reset(x_, y, var)
         self.model.train()
         self.likelihood.train()
 
-        training_iter = 100
+        training_iter = 1000
         last_loss = 0
         loss_change = []
         for i in range(training_iter):
@@ -222,7 +232,7 @@ class GpytorchGPR(object):
             loss.backward()
             self.optimizer.step()
             delta = loss.item() - last_loss
-            loss_change.append(abs(delta))
+            # loss_change.append(abs(delta))
             # if np.mean(loss_change[max(0, i-10):i+1]) < .01:
             #     break
             last_loss = loss.item()
@@ -244,7 +254,8 @@ class GpytorchGPR(object):
     def predict(self, x, return_cov=True, return_std=False):
         self.model.eval()
         self.likelihood.eval()
-        x_ = to_torch(x)
+        x_ = self.normalize_x(x)
+        x_ = to_torch(x_)
 
         with gpytorch.fast_pred_var() and torch.no_grad():
             pred = self.likelihood(self.model(x_))
