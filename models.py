@@ -11,6 +11,8 @@ from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
 import numpy as np
+from scipy.linalg import cholesky, cho_solve, solve_triangular
+import warnings
 import ipdb
 from utils import to_torch
 
@@ -210,11 +212,12 @@ class GpytorchGPR(object):
         self._train_x = torch.FloatTensor(x)
         self._train_y = torch.FloatTensor(y)
         self._train_y_mean = self._train_y.mean()
+        self._norm_train_y = self._train_y - self._train_y_mean
         if var is not None:
             self._train_var = torch.FloatTensor(var)
 
         self.likelihood = GaussianLikelihood()
-        self.model = ExactGPModel(self._train_x, self._train_y,
+        self.model = ExactGPModel(self._train_x, self._norm_train_y,
                                   self.likelihood, self._train_var,
                                   self.latent, self.kernel, **kwargs)
 
@@ -225,37 +228,49 @@ class GpytorchGPR(object):
         # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,
                             # mode='min',patience=50,verbose=True)
             
-
     def fit(self, x, y, var=None, **kwargs):
+        if var is None:
+            var = np.full(len(y), 1e-5)
         self.reset(x, y, var, **kwargs)
         self.model.train()
         self.likelihood.train()
 
-        training_iter = 500
-        norm_train_y = self._train_y - self._train_y_mean
+        training_iter = 200
         
         # NOTE: with zero mean, loss seems to converge
+        # TODO: no. of iterations depends on the actual values
+        # it may be a good idea to normalize the output values (check this)
         for i in range(training_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
-            loss = -self.mll(output, norm_train_y)#/len(y)
+            loss = -self.mll(output, self._norm_train_y)#/len(y)
             loss.backward()
             self.optimizer.step()
             # self.lr_scheduler.step(loss)
             print(i, loss.item())
-        
-    def cov_mat(self, x1, x2, white_noise=None):
+
+        # precomputing quantities for predictions
+        K = self.cov_mat(self._train_x, white_noise=self._train_var)
+        self.L_ = cholesky(K, lower=True)
+
+    def cov_mat(self, x1, x2=None, white_noise=None):
         x1_ = to_torch(x1)
         x2_ = to_torch(x2)
-        # important to set model to eval mode
+        white_noise = to_torch(white_noise)
+        flag = x2_ is None or torch.equal(x1_, x2_)
+
+        # NOTE: set model to eval mode
         self.model.eval()
         with torch.no_grad():
             x1_ = self.model.latent_func(x1_)
-            x2_ = self.model.latent_func(x2_)
-            cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
-        # add white noise component here
-        if white_noise is not None:
-            cov = cov + white_noise
+            if flag:
+                cov = self.model.covar_module(x1_).evaluate().cpu().numpy()
+                # add white noise only for symmetric case
+                if white_noise is not None:
+                    cov = cov + torch.diag(white_noise)
+            else:
+                x2_ = self.model.latent_func(x2_)
+                cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
         return cov
 
     def predict(self, x, return_cov=False, return_std=False):
@@ -267,11 +282,25 @@ class GpytorchGPR(object):
             pred = self.likelihood(self.model(x_))
             pred_mean = pred.mean().cpu().numpy()
             pred_mean += self._train_y_mean
+
+            K_trans = self.cov_mat(x_, self._train_x)
             if return_std:
-                std = pred.std().cpu().numpy()
-                return pred_mean, std
+                L_inv = solve_triangular(self.L_.T, np.eye(self.L_.shape[0]))
+                K_inv = L_inv.dot(L_inv.T)
+
+                y_var = np.ones(x.shape[0])
+                y_var -= np.einsum('ij,ij->i', np.dot(K_trans, K_inv), K_trans)
+                y_var_negative = y_var < 0
+                if np.any(y_var_negative):
+                    warnings.warn("Predicted variances smaller than 0. "
+                                  "Setting those variances to 0.")
+                    y_var[y_var_negative] = 0.0
+                ipdb.set_trace()
+                return pred_mean, np.sqrt(y_var)
+
             elif return_cov:
-                cov = pred.covar().evaluate().cpu().numpy()
-                return pred_mean, cov
-            else:
-                return pred_mean
+                v = cho_solve((self.L_, True), K_trans.T)
+                y_cov = self.cov_mat(x) - K_trans.dot(v)
+                return pred_mean, y_cov
+
+            return pred_mean

@@ -2,6 +2,8 @@ import pickle
 import numpy as np 
 import ipdb
 from utils import vec_to_one_hot_matrix
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def get_features_data(contents, features):
@@ -52,7 +54,18 @@ def save_dataset(filename, target_feature):
     with open(save_file, 'wb') as fn:
         pickle.dump(data_dict, fn)
 
-
+def plot_variety_distribution(fl):
+    with open(fl, 'rb') as f:
+        contents = pickle.load(f)
+    varieties = get_features_data(contents, 'variety').squeeze().reshape(15,37)
+    
+    fig, ax = plt.subplots()
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+    im = ax.imshow(varieties, cmap=plt.get_cmap('RdBu', 4))
+    fig.colorbar(im, cax=cax, orientation='vertical', ticks=np.arange(4))
+    plt.show()
+    
 if __name__ == '__main__':
     fl = 'data/data_2018.pkl'
     # available features
@@ -68,4 +81,5 @@ if __name__ == '__main__':
     # save_dataset(fl, 'plant_width_mean')
     # save_dataset(fl, 'plant_height_mean(cm)')
     # save_dataset(fl, 'height_aerial(cm)')
-    save_dataset(fl, 'plant_count_mean')
+    # save_dataset(fl, 'plant_count_mean')
+    plot_variety_distribution(fl)

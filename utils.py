@@ -10,6 +10,8 @@ CONST = .5*np.log(2*np.pi*np.exp(1))
 def to_torch(arr):
     if arr is None:
         return None
+    if arr.__class__.__module__ == 'torch':
+        return arr
     if arr.__class__.__module__ == 'numpy':
         return torch.FloatTensor(arr)
     return arr
