@@ -10,12 +10,12 @@ from models import SklearnGPR, GpytorchGPR
 
 
 class Agent(object):
-    def __init__(self, env, model_type='gpytorch_GP'):
+    def __init__(self, env, model_type='gpytorch_GP', **kwargs):
         super()
         self.env = env
         self.gp_type = model_type
         self.gp = None
-        self._init_models()
+        self._init_models(**kwargs)
 
         self._camera_noise = 1.0
         self._sensor_noise = 0.05
@@ -43,11 +43,13 @@ class Agent(object):
         self.gp_update_every = 0
         self.last_update = 0
 
-    def _init_models(self):
+    def _init_models(self, **kwargs):
         if self.gp_type == 'sklearn_GP':
             self.gp = SklearnGPR()
         elif self.gp_type == 'gpytorch_GP':
-            self.gp = GpytorchGPR(use_embed=True)
+            latent = kwargs['latent'] if 'latent' in kwargs else None
+            lr = kwargs['lr'] if 'lr' in kwargs else .01
+            self.gp = GpytorchGPR(latent, lr)
         else:
             raise NotImplementedError
 

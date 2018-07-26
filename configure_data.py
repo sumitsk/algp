@@ -55,5 +55,17 @@ def save_dataset(filename, target_feature):
 
 if __name__ == '__main__':
     fl = 'data/data_2018.pkl'
-    # get_dataset(fl, target_feature='plant_width_mean')
-    save_dataset(fl, 'plant_width_mean')
+    # available features
+    # ['row1', 'row2', 'range', 'variety',
+    # 'height_aerial(cm)', 'plant_height_mean(cm)',
+    # 'plant_height_max(cm)', 'dry_to_green_ratio_mean',
+    # 'dry_to_green_ratio_variance', 'plant_count_mean',
+    # 'plant_count_variance', 'plant_width_mean',
+    # 'plant_width_variance', 'grvi_mean', 'grvi_var',
+    # 'leaf_fill_mean', 'leaf_fill_var']
+
+
+    # save_dataset(fl, 'plant_width_mean')
+    # save_dataset(fl, 'plant_height_mean(cm)')
+    # save_dataset(fl, 'height_aerial(cm)')
+    save_dataset(fl, 'plant_count_mean')
