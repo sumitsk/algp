@@ -6,11 +6,11 @@ from map import Map
 
 
 class FieldEnv(object):
-    def __init__(self, num_rows=15, num_cols=15, data_file=None):
+    def __init__(self, num_rows=25, num_cols=25, data_file=None):
         super(FieldEnv, self).__init__()
 
         if data_file is None:
-            from utils import generate_gaussian_data  # , generate_mixed_data
+            from utils import generate_gaussian_data, generate_mixed_data
             self.num_rows, self.num_cols = num_rows, num_cols
             self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
             # self.X, self.Y = generate_mixed_data(num_rows, num_cols)

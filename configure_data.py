@@ -82,4 +82,5 @@ if __name__ == '__main__':
     # save_dataset(fl, 'plant_height_mean(cm)')
     # save_dataset(fl, 'height_aerial(cm)')
     # save_dataset(fl, 'plant_count_mean')
-    plot_variety_distribution(fl)
+    # save_dataset(fl, 'dry_to_green_ratio_mean')
+    # plot_variety_distribution(fl)

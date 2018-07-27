@@ -10,7 +10,7 @@ from utils import draw_plots, zero_mean_unit_variance
 def draw_3_plots(num_rows, num_cols, true_y, y1, y2,
                title=None, fig=None, ax=None):
     if fig is None or ax is None:
-        fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+        fig, ax = plt.subplots(3, 1, figsize=(12, 6))
         axt, axp, axv = ax
 
     axt.set_title('Ground truth')
@@ -29,7 +29,7 @@ def draw_3_plots(num_rows, num_cols, true_y, y1, y2,
     fig.add_axes(caxp)
     fig.colorbar(imp, caxp, orientation='vertical')
 
-    axv.set_title('Predicted values from GP with gene embedding')
+    axv.set_title('Predicted values from GP with genotype embedding')
     imv = axv.imshow(y2.reshape(num_rows, num_cols),
     				 cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
     divv = make_axes_locatable(axv)
@@ -50,7 +50,7 @@ def transform_y(y, inverse=False):
 
 
 def fit_and_eval(gp, x, y, x_train, y_train, **kwargs):
-    var = np.full(len(y_train), .05)
+    var = np.full(len(y_train), .005)
     # var = None
     gp.fit(x_train, y_train, var, **kwargs)
     mu, std = gp.predict(x, return_std=True)
@@ -66,10 +66,11 @@ def compute_rmse(y, mu):
 	return np.linalg.norm(y - mu) / np.sqrt(len(y))
 
 # file with field data
-feature = 'plant_width_mean'
+# feature = 'plant_width_mean'
 # feature = 'plant_height_mean(cm)'
 # feature = 'height_aerial(cm)'
 # feature = 'plant_count_mean'
+feature = 'dry_to_green_ratio_mean'
 data_file = 'data/' + feature + '_dataset.pkl'
 env = FieldEnv(data_file=data_file)
 
@@ -79,18 +80,21 @@ num_train = int(.6*n)
 train_indices = np.random.randint(0, n, num_train)
 test_indices = np.array(list(set(range(n)) - set(train_indices)))
 
-noise_std = .05
-noise_var = np.full(num_train, noise_std**2)
+# noise_std = .05
+# noise_var = np.full(num_train, noise_std**2)
 x = env.X
 y = env.Y
+norm_factor = y[train_indices].max()
+y /= norm_factor
 
 # normalize dataset
-# x[:, :2] = zero_mean_unit_variance(x[:, :2])
+x[:, :2] = zero_mean_unit_variance(x[:, :2])
+# x = zero_mean_unit_variance(x)
 # x[: ,0] *= 2
-x[:, :2] /= x[:, :2].max(axis=0)
+# x[:, :2] /= x[:, :2].max(axis=0)
 
 x_train = x[train_indices, :]
-y_train = y[train_indices]
+y_train = y[train_indices] 
 x_test = x[test_indices, :]
 y_test = y[test_indices]
 
@@ -127,12 +131,12 @@ print('GP_simple RMSE', test_rmse2)
 print('GP_field', test_rmse_field)
 
 # fig1 = draw_plots(num_rows, num_cols, y, mu1, std1**2, 'GP_sklearn')
-fig2 = draw_plots(num_rows, num_cols, y, mu2, std2**2, 'GP_simple')
+# fig2 = draw_plots(num_rows, num_cols, y, mu2, std2**2, 'GP_simple')
 # fig3 = draw_plots(num_rows, num_cols, y, mu3, std3**2, 'GP_linear')
 # fig4 = draw_plots(num_rows, num_cols, y, mu4, std4**2, 'GP_non_linear')
 # fig5 = draw_plots(num_rows, num_cols, y, mu_field, std_field**2, 'GP_field')
 
-# fig = draw_3_plots(num_rows, num_cols, y, mu2, mu_field, feature)
+fig = draw_3_plots(num_rows, num_cols, y, mu2, mu_field, feature)
 plt.show()
 
 

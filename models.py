@@ -185,7 +185,6 @@ class FieldLatentFunction(nn.Module):
         return x
 
 
-# TODO: try batchnorm and lr scheduler
 class GpytorchGPR(object):
     def __init__(self, latent=None, lr=.1, kernel=None):
         self._train_x = None
@@ -295,8 +294,9 @@ class GpytorchGPR(object):
                     warnings.warn("Predicted variances smaller than 0. "
                                   "Setting those variances to 0.")
                     y_var[y_var_negative] = 0.0
-                ipdb.set_trace()
                 return pred_mean, np.sqrt(y_var)
+
+
 
             elif return_cov:
                 v = cho_solve((self.L_, True), K_trans.T)

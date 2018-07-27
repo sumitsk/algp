@@ -89,7 +89,10 @@ class Agent(object):
         x = self.env.X[self._visited]
         var = 1.0/(self.obs_var_inv[self._visited])
         y = self.obs_y[self._visited]
-        self.gp.fit(x, y, var)
+        # NOTE: for gp training y if normalized performs better
+        # self.gp.fit(x, y, var)
+        # ipdb.set_trace()
+        self.gp.fit(x, y/1.1, var)
 
     def run(self, render=False, iterations=40):
         if self._strategy == 'sensor_maximum_utility':
@@ -126,21 +129,28 @@ class Agent(object):
         # render plots
         axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
         axt.set_title('Ground Truth')
-        imt = axt.imshow(self.env.Y.reshape(self.env.shape))
+        imt = axt.imshow(self.env.Y.reshape(self.env.shape),
+            cmap='ocean', vmin=self.env.Y.min(), vmax=self.env.Y.max())
         div = make_axes_locatable(axt)
         caxt = div.new_horizontal(size='5%', pad=.05)
-        # fig.add_axes(caxt)
-        # fig.colorbar(imt, caxt, orientation='vertical')
+        fig.add_axes(caxt)
+        fig.colorbar(imt, caxt, orientation='vertical')
 
         axp.set_title('Predicted values')
-        imp = axp.imshow(pred.reshape(self.env.shape))
+        imp = axp.imshow(pred.reshape(self.env.shape),
+            cmap='ocean', vmin=self.env.Y.min(), vmax=self.env.Y.max())
         divm = make_axes_locatable(axp)
         caxp = divm.new_horizontal(size='5%', pad=.05)
-        # fig.add_axes(caxp)
-        # fig.colorbar(imp, caxp, orientation='vertical')
+        fig.add_axes(caxp)
+        fig.colorbar(imp, caxp, orientation='vertical')
 
         axv.set_title('Variance')
-        imv = axv.imshow(var.reshape(self.env.shape))
+        imv = axv.imshow(var.reshape(self.env.shape), cmap='hot')
+        # divv = make_axes_locatable(axv)
+        # caxv = divv.new_horizontal(size='5%', pad=.05)
+        # fig.add_axes(caxv)
+        # fig.colorbar(imv, caxv, orientation='vertical')
+
 
     # def maximum_entropy(self, source):
     #     if source == 'sensor':

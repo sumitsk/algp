@@ -8,7 +8,7 @@ class Map(object):
     def __init__(self,
                  num_gp_rows=15,
                  num_gp_cols=37,
-                 num_row_passes=2,
+                 num_row_passes=4,
                  row_pass_width=1
                  ):
 
