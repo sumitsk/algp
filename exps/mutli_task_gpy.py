@@ -1,115 +1,63 @@
-import math
-import torch
-import gpytorch
-from matplotlib import pyplot as plt
-
-from gpytorch.kernels import RBFKernel, IndexKernel
-from gpytorch.means import ConstantMean
-from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.random_variables import GaussianRandomVariable
-
+from utils import load_data, zero_mean_unit_variance
+from multi_task_models import MultitaskGP
+from models import GpytorchGPR
+import numpy as np
 import ipdb
 
 
-# Define plotting function
-def ax_plot(ax, train_y, rand_var, title):
-    # Get lower and upper confidence bounds
-    lower, upper = rand_var.confidence_region()
-    # Plot training data as black stars
-    ax.plot(train_x.data.numpy(), train_y.data.numpy(), 'k*')
-    # Predictive mean as blue line
-    ax.plot(test_x.data.numpy(), rand_var.mean().data.numpy(), 'b')
-    # Shade in confidence 
-    ax.fill_between(test_x.data.numpy(), lower.data.numpy(), upper.data.numpy(), alpha=0.5)
-    ax.set_ylim([-3, 3])
-    ax.legend(['Observed Data', 'Mean', 'Confidence'])
-    ax.set_title(title)
+file1 = 'data/plant_width_mean_dataset.pkl'
+# file2 = 'data/plant_count_mean_dataset.pkl'
+# file2 = 'data/plant_height_mean(cm)_dataset.pkl'
+# file2 = 'data/dry_to_green_ratio_mean_dataset.pkl'
+file2 = 'data/height_aerial(cm)_dataset.pkl'
 
 
-class MultitaskGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
-        super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = ConstantMean()
-        self.covar_module = RBFKernel(log_lengthscale_bounds=(-3, 3))
-        # We learn an IndexKernel for 2 tasks
-        # (so we'll actually learn 2x2=4 tasks with correlations)
-        self.task_covar_module = IndexKernel(n_tasks=2, rank=1)
+nr1, nc1, X1, Y1 = load_data(file1)
+nr2, nc2, X2, Y2 = load_data(file2)
+assert (nr1, nc1) == (nr2, nc2) and (X1==X2).all()
 
-    def forward(self,x,i):
-        mean_x = self.mean_module(x)
-        # Get all covariances, we'll look up the task-speicific ones
-        covar_x = self.covar_module(x)
-        # Get the covariance for task i
-        covar_i = self.task_covar_module(i)
-        covar_xi = covar_x.mul(covar_i)
-        # ipdb.set_trace()
-        return GaussianRandomVariable(mean_x, covar_xi)
+n = len(Y1)
+n_train = int(.4*n)
+train_ind = np.random.randint(0, n, n_train)
+test_ind = list(set(list(range(n))) - set(train_ind))
 
+x_train = X1[train_ind, :2]
+x_test = X1[test_ind, :2]
+mean = x_train.mean()
+std = x_train.std()
 
-class MultitaskGP(object):
-    def __init__(self, train_x, train_y1, train_y2, y1_inds, y2_inds):
-        self.train_x = train_x
-        self.train_y1 = train_y1
-        self.train_y2 = train_y2
-        self.y1_inds = y1_inds
-        self.y2_inds = y2_inds
+x_train = zero_mean_unit_variance(x_train, mean, std)
+x_test = zero_mean_unit_variance(x_test, mean, std)
+# add variety component also
+# x_train = np.hstack([x_train, X1[train_ind, 2:]])
+# x_test = np.hstack([x_test, X1[test_ind, 2:]])
+y1_train = Y1[train_ind]
+y2_train = Y2[train_ind]
+y1_test = Y1[test_ind]
+y2_test = Y2[test_ind]
+y1_max = y1_train.max()
+y2_max = y2_train.max()
+y1_train /= y1_max
+y2_train /= y2_max
+y1_test /= y1_max
+y2_test /= y2_max
 
-        x = (torch.cat([train_x.data, train_x.data]),
-             torch.cat([y1_inds.data, y2_inds.data]))
-        y = torch.cat([train_y1.data, train_y2.data])
-        self.likelihood = GaussianLikelihood(log_noise_bounds=(-6, 6))
-        self.model = MultitaskGPModel(x, y, self.likelihood)
+gp = MultitaskGP(n_tasks=2, lr=.01, max_iter=1000)
+gp.fit(x_train, [y1_train, y2_train])
+pred_mu, pred_rand_var = gp.predict(x_test)
 
-        # includes gaussian likelihood parameters
-        self.optimizer = torch.optim.Adam([
-            {'params': self.model.parameters()},], lr=0.1)
-        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
-
-    def fit(self):
-        self.model.train()
-        self.likelihood.train()
-
-        iterations = 50
-        for i in range(iterations):
-            self.optimizer.zero_grad()
-            # Make predictions from training data
-            # Again, note feeding duplicated x_data and indices indicating which task
-            x = torch.cat([self.train_x, self.train_x])
-            idx = torch.cat([self.y1_inds, self.y2_inds])
-            y = torch.cat([self.train_y1, self.train_y2])
-            output = self.model(x, idx)
-            # Calc the loss and backprop gradients
-            loss = -self.mll(output, y)
-            loss.backward()
-            print('Iter %d/50 - Loss: %.3f' % (i + 1, loss.data[0]))
-            self.optimizer.step()
-
-    def test(self, test_x, y1_inds_test, y2_inds_test):
-        self.model.eval()
-        self.likelihood.eval()
-
-        pred_y1 = self.likelihood(self.model(test_x, y1_inds_test))
-        pred_y2 = self.likelihood(self.model(test_x, y2_inds_test))
-
-        # initialise plots
-        f, (y1_ax, y2_ax) = plt.subplots(1, 2, figsize=(8, 3))
-        ax_plot(y1_ax, train_y1, pred_y1, 'Observed Values (Likelihood)')
-        ax_plot(y2_ax, train_y2, pred_y2, 'Observed Values (Likelihood)')
-        plt.show()
+rmse0 = np.linalg.norm(y1_test - pred_mu[0])/np.sqrt(len(y1_test))
+rmse1 = np.linalg.norm(y2_test - pred_mu[1])/np.sqrt(len(y2_test))
 
 
-if __name__ == '__main__':
-    train_x = torch.linspace(0, 1, 11)
-    # y1s are indexed 0, y2s are indexed 1
-    y1_inds = torch.zeros(11).long()
-    y2_inds = torch.ones(11).long()
+gp1 = GpytorchGPR(lr=.01, max_iter=1000)
+gp1.fit(x_train, y1_train)
+pred_y1 = gp1.predict(x_test)
+rmse11 = np.linalg.norm(y1_test - pred_y1)/np.sqrt(len(y1_test))
 
-    train_y1 = torch.sin(train_x.data * (2 * math.pi)) + torch.randn(train_x.size()) * 0.2
-    train_y2 = torch.cos(train_x.data * (2 * math.pi)) + torch.randn(train_x.size()) * 0.2
+gp2 = GpytorchGPR(lr=.01, max_iter=1000)
+gp2.fit(x_train, y2_train)
+pred_y2 = gp2.predict(x_test)
+rmse21 = np.linalg.norm(y2_test - pred_y2)/np.sqrt(len(y2_test))
 
-    gp_model = MultitaskGP(train_x, train_y1, train_y2, y1_inds, y2_inds)
-    gp_model.fit()
-    test_x = torch.linspace(0, 1, 51)
-    y1_inds_test = torch.zeros(51).long()
-    y2_inds_test = torch.ones(51).long()
-    gp_model.test(test_x, y1_inds_test, y2_inds_test)
+ipdb.set_trace()

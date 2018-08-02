@@ -3,6 +3,7 @@ import ipdb
 import pickle
 
 from map import Map
+from utils import load_data
 
 
 class FieldEnv(object):
@@ -16,7 +17,7 @@ class FieldEnv(object):
             # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
         else:
-            self._load_data(data_file)
+            self.num_rows, self.num_cols, self.X, self.Y = load_data(data_file)
 
         # Occupancy map of the field
         self.map = Map(self.num_rows, self.num_cols)
@@ -24,14 +25,6 @@ class FieldEnv(object):
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         return y
-
-    def _load_data(self, filename):
-        with open(filename, 'rb') as fn:
-            data_dict = pickle.load(fn)
-        self.num_rows = data_dict['num_rows']
-        self.num_cols = data_dict['num_cols']
-        self.X = data_dict['X']
-        self.Y = data_dict['Y'].squeeze()
 
     @property
     def shape(self):

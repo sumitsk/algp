@@ -186,7 +186,7 @@ class FieldLatentFunction(nn.Module):
 
 
 class GpytorchGPR(object):
-    def __init__(self, latent=None, lr=.1, kernel=None):
+    def __init__(self, latent=None, lr=.1, kernel=None, max_iter=100):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -198,6 +198,7 @@ class GpytorchGPR(object):
         self.lr = lr
         self.latent = latent
         self.kernel = kernel
+        self.max_iter = max_iter
 
     @property
     def train_x(self):
@@ -208,12 +209,12 @@ class GpytorchGPR(object):
         return self._train_var.cpu().numpy()
 
     def reset(self, x, y, var, **kwargs):
-        self._train_x = torch.FloatTensor(x)
-        self._train_y = torch.FloatTensor(y)
+        self._train_x = to_torch(x)
+        self._train_y = to_torch(y)
         self._train_y_mean = self._train_y.mean()
         self._norm_train_y = self._train_y - self._train_y_mean
         if var is not None:
-            self._train_var = torch.FloatTensor(var)
+            self._train_var = to_torch(var)
 
         self.likelihood = GaussianLikelihood()
         self.model = ExactGPModel(self._train_x, self._norm_train_y,
@@ -225,7 +226,7 @@ class GpytorchGPR(object):
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
             self.likelihood, self.model)
         # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,
-                            # mode='min',patience=50,verbose=True)
+        #                       mode='min',patience=50,verbose=True)
             
     def fit(self, x, y, var=None, **kwargs):
         if var is None:
@@ -233,16 +234,14 @@ class GpytorchGPR(object):
         self.reset(x, y, var, **kwargs)
         self.model.train()
         self.likelihood.train()
-
-        training_iter = 200
         
         # NOTE: with zero mean, loss seems to converge
         # TODO: no. of iterations depends on the actual values
         # it may be a good idea to normalize the output values (check this)
-        for i in range(training_iter):
+        for i in range(self.max_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
-            loss = -self.mll(output, self._norm_train_y)#/len(y)
+            loss = -self.mll(output, self._norm_train_y) # /len(y)
             loss.backward()
             self.optimizer.step()
             # self.lr_scheduler.step(loss)

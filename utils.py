@@ -3,6 +3,8 @@ import ipdb
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import torch
+import pickle 
+
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
 
@@ -15,6 +17,26 @@ def to_torch(arr):
     if arr.__class__.__module__ == 'numpy':
         return torch.FloatTensor(arr)
     return arr
+
+
+def to_numpy(x):
+    if x is None:
+        return None
+    if x.__class__.__module__ == 'torch':
+        return x.detach().cpu().numpy()
+    if x.__class__.__module__ == 'numpy':
+        return x
+    return np.array(x)
+
+
+def load_data(filename):
+    with open(filename, 'rb') as fn:
+        data_dict = pickle.load(fn)
+    num_rows = data_dict['num_rows']
+    num_cols = data_dict['num_cols']
+    X = data_dict['X']
+    Y = data_dict['Y'].squeeze()
+    return num_rows, num_cols, X, Y
 
 
 def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum'):
