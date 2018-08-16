@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import gpytorch
 from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel
-from gpytorch.means import ConstantMean, ZeroMean
+from gpytorch.means import ZeroMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
@@ -15,6 +15,7 @@ from scipy.linalg import cholesky, cho_solve, solve_triangular
 import warnings
 import ipdb
 from utils import to_torch
+from pprint import pprint
 
 
 def weights_init(m):
@@ -75,7 +76,6 @@ class ExactGPModel(gpytorch.models.ExactGP):
         self._data_dims = train_x.size(-1)
         self._set_latent_function(latent, **kwargs) 
         
-        # self.mean_module = ConstantMean()
         self.mean_module = ZeroMean()
         ard_num_dims = self.latent_func.out_dims if self.latent_func.out_dims is not None else train_x.size(-1)
         
@@ -186,7 +186,7 @@ class FieldLatentFunction(nn.Module):
 
 
 class GpytorchGPR(object):
-    def __init__(self, latent=None, lr=.1, kernel=None, max_iter=100):
+    def __init__(self, latent=None, lr=.01, kernel=None, max_iterations=200):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -198,7 +198,10 @@ class GpytorchGPR(object):
         self.lr = lr
         self.latent = latent
         self.kernel = kernel
-        self.max_iter = max_iter
+        self.max_iter = max_iterations
+        # args = {'lr': lr, 'max_iter': max_iterations}
+        # print('GPR model arguments:')
+        # pprint(args)
 
     @property
     def train_x(self):
@@ -217,18 +220,13 @@ class GpytorchGPR(object):
             self._train_var = to_torch(var)
 
         self.likelihood = GaussianLikelihood()
-        self.model = ExactGPModel(self._train_x, self._norm_train_y,
-                                  self.likelihood, self._train_var,
-                                  self.latent, self.kernel, **kwargs)
-
-        self.optimizer = torch.optim.Adam(
-            [{'params': self.model.parameters()}, ], lr=self.lr)
-        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
-            self.likelihood, self.model)
-        # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,
-        #                       mode='min',patience=50,verbose=True)
+        self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel, **kwargs)
+        self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
+        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+        # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',patience=50,verbose=True)
             
     def fit(self, x, y, var=None, **kwargs):
+        #  TODO: do we need non-zero var (probably yes for cholesky decomposition)
         if var is None:
             var = np.full(len(y), 1e-5)
         self.reset(x, y, var, **kwargs)
@@ -236,7 +234,6 @@ class GpytorchGPR(object):
         self.likelihood.train()
         
         # NOTE: with zero mean, loss seems to converge
-        # TODO: no. of iterations depends on the actual values
         # it may be a good idea to normalize the output values (check this)
         for i in range(self.max_iter):
             self.optimizer.zero_grad()
@@ -245,8 +242,13 @@ class GpytorchGPR(object):
             loss.backward()
             self.optimizer.step()
             # self.lr_scheduler.step(loss)
-            print(i, loss.item())
+            # print(i, loss.item())
+            if i == 0:
+                initial_ll = -loss.item()
+            elif i == self.max_iter - 1:
+                final_ll = -loss.item()
 
+        print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
         # precomputing quantities for predictions
         K = self.cov_mat(self._train_x, white_noise=self._train_var)
         self.L_ = cholesky(K, lower=True)
@@ -294,8 +296,6 @@ class GpytorchGPR(object):
                                   "Setting those variances to 0.")
                     y_var[y_var_negative] = 0.0
                 return pred_mean, np.sqrt(y_var)
-
-
 
             elif return_cov:
                 v = cho_solve((self.L_, True), K_trans.T)

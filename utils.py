@@ -109,9 +109,8 @@ def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_v
 
 
 def process_noise_var(dim, noise_var):
-    # using a default noise of .05 (camera noise)
     if noise_var is None:
-        noise_var_ = 0.05
+        noise_var_ = 0.0
     elif isinstance(noise_var, int) or isinstance(noise_var, float):
         noise_var_ = noise_var * np.eye(dim)
     elif isinstance(noise_var, list):
@@ -129,21 +128,18 @@ def process_noise_var(dim, noise_var):
     return noise_var_
 
 
-def entropy_from_cov(cov):
-    d = cov.shape[0]
-    ent = d * CONST + .5 * np.log(np.linalg.det(cov))
-    return ent
-
-
-def entropy(x, gp, x_noise_var):
-    x_ = np.copy(x)
-    if x.ndim == 1:
-        x_ = x.reshape(-1, len(x))
+def entropy(x, gp, x_noise_var=0):
+    x_ = x.reshape(-1, len(x)) if x.ndim == 1 else x
 
     # NOTE: because of noise term, even if there are repeated entries, the det is not 0
     x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
     cov = gp.cov_mat(x_, x_, x_noise_var_)
     return entropy_from_cov(cov)
+
+
+def entropy_from_cov(cov):
+    ent = cov.shape[0] * CONST + .5 * np.linalg.slogdet(cov)[1].item()
+    return ent
 
 
 def conditional_entropy(x, a, gp, x_noise_var, a_noise_var, sigma_aa_inv=None):
@@ -186,35 +182,39 @@ def zero_mean_unit_variance(data, mean=None, std=None):
     return (data - mean) / std
 
 
-def draw_plots(num_rows, num_cols, true_y, pred_y, pred_var,
-               title=None, fig=None, ax=None):
+def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
+               title1=None, title2=None, title3=None, fig=None, ax=None):
     if fig is None or ax is None:
         fig, ax = plt.subplots(1, 3, figsize=(12, 4))
         axt, axp, axv = ax
 
-    axt.set_title('Ground truth')
-    imt = axt.imshow(true_y.reshape(num_rows, num_cols),
-                     cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
+    title1 = 'Ground truth' if title1 is None else title1
+    axt.set_title(title1)
+    imt = axt.imshow(plot1.reshape(num_rows, num_cols),
+                     cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
     div = make_axes_locatable(axt)
     caxt = div.new_horizontal(size='5%', pad=.05)
     fig.add_axes(caxt)
     fig.colorbar(imt, caxt, orientation='vertical')
 
-    axp.set_title('Predicted values')
-    imp = axp.imshow(pred_y.reshape(num_rows, num_cols),
-                     cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
+    title2 = 'Predicted values' if title2 is None else title2
+    axp.set_title(title2)
+    imp = axp.imshow(plot2.reshape(num_rows, num_cols),
+                     cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
     divm = make_axes_locatable(axp)
     caxp = divm.new_horizontal(size='5%', pad=.05)
     fig.add_axes(caxp)
     fig.colorbar(imp, caxp, orientation='vertical')
 
-    axv.set_title('Variance')
-    imv = axv.imshow(pred_var.reshape(num_rows, num_cols), cmap='hot')
+    title3 = 'Variance' if title3 is None else title3
+    axv.set_title(title3)
+    imv = axv.imshow(plot3.reshape(num_rows, num_cols), cmap='hot')
     divv = make_axes_locatable(axv)
     caxv = divv.new_horizontal(size='5%', pad=.05)
     fig.add_axes(caxv)
     fig.colorbar(imv, caxv, orientation='vertical')
 
-    if title is not None:
-        fig.suptitle(title)
+    if main_title is not None:
+        fig.suptitle(main_title)
     return fig
+
