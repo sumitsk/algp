@@ -66,7 +66,7 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, alg
         elif algo == 'sum':
             y += tmp
 
-    return grid, y
+    return grid, y/y.max()
 
 
 def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2, algo='sum'):
@@ -98,7 +98,7 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
             y = np.maximum(y, tmp)
         elif algo == 'sum':
             y += tmp
-    return grid, y
+    return grid, y/y.max()
 
 
 def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):

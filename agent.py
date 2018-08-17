@@ -31,15 +31,23 @@ class Agent(object):
 
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
+        self.stops = np.empty((0, 2))
         self.update_every = args.update_every
 
     def _init_models(self, args):
         if args.model_type == 'sklearn_GP':
             self.gp = SklearnGPR()
         elif args.model_type == 'gpytorch_GP':
-            self.gp = GpytorchGPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel=args.kernel)
+            kernel_params = self._get_kernel_params(args)
+            self.gp = GpytorchGPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params)
         else:
             raise NotImplementedError
+
+    def _get_kernel_params(self, args):
+        kernel_params = {'type': args.kernel}
+        if args.kernel == 'spectral_mixture':
+            kernel_params['n_mixtures'] = args.n_mixtures
+        return kernel_params
 
     def reset(self):
         self._visited = np.full(self.env.num_samples, False)
@@ -88,7 +96,7 @@ class Agent(object):
         x = self.env.X[self._visited]
         var = 1.0/(self.obs_precision[self._visited])
         y = self.obs_y[self._visited]
-        # NOTE: for gp training if normalized obsevations leads to stable training performs better
+
         print('\n--- Updating GP model ---')
         start = time.time()
         self.gp.fit(x, y, var)
@@ -105,18 +113,19 @@ class Agent(object):
         else:
             raise NotImplementedError
 
-        # TODO: log relevant things at the end
         # final training and test rmse and variance
         rmse_visited = np.linalg.norm(final_pred[self._visited] - self.env.Y[self._visited])/np.sqrt(self._visited.sum())
         rmse_unvisited = np.linalg.norm(final_pred[~self._visited] - self.env.Y[~self._visited])/np.sqrt((~self._visited).sum())
-
-        # path, camera samples, sensor samples
-        # self.path, self.sensor_seq,
-
+        
         print('==========================================================')
         print('--- Final statistics --- ')
         print('RMSE visited: {:.3f} unvisited: {:.3f}'.format(rmse_visited, rmse_unvisited))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(final_var.max(), final_var.min(), final_var.mean()))
+
+        # TODO: log relevant things
+        # path, camera samples, sensor samples
+        # self.path, self.sensor_seq, self.stops
+        # save these statistics and path and sensing locations to compare results later on
 
     def _render_path(self, ax):
         # ax.set_cmap('hot')
@@ -193,9 +202,11 @@ class Agent(object):
             self.agent_map_pose = next_node.map_pose
             if gp_index is not None:
                 self.sensor_seq = np.concatenate([self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
-
+            self.stops = np.concatenate([self.stops, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
+    
             print('\n--- Prediction --- ')
             pred, var = self.predict()
+            # TODO: max variance is often times quite low (check this)
             # TODO: implement a suitable terminating condition
             # if np.max(var) < .01:
             #     print('Converged')
@@ -254,7 +265,7 @@ class Agent(object):
                     new_node = Node(new_map_pose, new_gval, node.utility, new_parents_index, new_path)
                     open_nodes.append(new_node)
 
-        # NOTE: computational bottleneck
+        # NOTE: computational bottleneck (the most expensive part is GP training (reduce number of iterations there))
         all_nodes_indices = []
         all_nodes_x_noise = []
         for node in closed_nodes:
@@ -286,9 +297,9 @@ class Agent(object):
         cov_v = self.gp.cov_mat(v, v, white_noise=None)
         info = []
 
+        # a - all samples taken so far (with their data dependent noise)
         # a* = argmax MI(a, a_bar) where a_bar = v \ a
         # compute MI(a, a_bar) = H(a) + H(a_bar) - H(a, a_bar) for all a
-        # a - all samples taken so far (with their data dependent noise)
         for indices, noise in zip(all_nodes_indices, all_nodes_x_noise):
             if len(indices) == 0:
                 info.append(-np.inf)
@@ -313,8 +324,8 @@ class Agent(object):
             else:
                 vis[rest] = True
                 unvis = ~vis
-                precision_v[unvis[v_ind]] = self._camera_noise
-                # precision_v[unvis[v_ind]] = np.inf
+                # precision_v[unvis[v_ind]] = self._camera_noise
+                precision_v[unvis[v_ind]] = np.inf
                 cov_a_bar = cov_v[unvis[v_ind]].T[unvis[v_ind]].T
                 a_bar_noise = 1.0/precision_v[unvis[v_ind]]
 

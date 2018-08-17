@@ -1,9 +1,8 @@
 import numpy as np
 import ipdb
-import pickle
 
 from map import Map
-from utils import load_data
+from utils import load_data, zero_mean_unit_variance
 
 
 class FieldEnv(object):
@@ -13,14 +12,20 @@ class FieldEnv(object):
         if data_file is None:
             from utils import generate_gaussian_data, generate_mixed_data
             self.num_rows, self.num_cols = num_rows, num_cols
-            self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
-            # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
+            # self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
+            self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
         else:
             self.num_rows, self.num_cols, self.X, self.Y = load_data(data_file)
 
+        self._normalize_dataset()
         # Occupancy map of the field
         self.map = Map(self.num_rows, self.num_cols)
+
+    def _normalize_dataset(self):
+        self.X[:, :2] = zero_mean_unit_variance(self.X[:, :2])
+        # TODO: this may be a bit unfair (normalize by an expected upper bound instead)
+        self.Y /= self.Y.max()
 
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))

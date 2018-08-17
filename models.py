@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import gpytorch
-from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel
+from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel, SpectralMixtureKernel
 from gpytorch.means import ZeroMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
@@ -71,7 +71,7 @@ class SklearnGPR(object):
 
     
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel=None, **kwargs):
+    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, **kwargs):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
         self._data_dims = train_x.size(-1)
         self._set_latent_function(latent, **kwargs) 
@@ -79,19 +79,24 @@ class ExactGPModel(gpytorch.models.ExactGP):
         self.mean_module = ZeroMean()
         ard_num_dims = self.latent_func.out_dims if self.latent_func.out_dims is not None else train_x.size(-1)
         
+        kernel = kernel_params['type']
         if kernel is None or kernel == 'rbf':
-            self.rbf_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
+            self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel == 'matern':
-            self.rbf_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
+            self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
+        elif kernel == 'spectral_mixture':
+            ipdb.set_trace()
+            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'])
+            self.kernel_covar_module.initialize_from_data(train_x, train_y)
         else:
             raise NotImplementedError
 
         # set covariance module
         if var is not None:
             self.noise_covar_module = WhiteNoiseKernel(var)
-            self.covar_module = self.rbf_covar_module + self.noise_covar_module
+            self.covar_module = self.kernel_covar_module + self.noise_covar_module
         else:
-            self.covar_module = self.rbf_covar_module
+            self.covar_module = self.kernel_covar_module
         
     def _set_latent_function(self, latent, **kwargs):
         if latent is None or latent == 'identity':
@@ -186,7 +191,7 @@ class FieldLatentFunction(nn.Module):
 
 
 class GpytorchGPR(object):
-    def __init__(self, latent=None, lr=.01, kernel=None, max_iterations=200):
+    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -197,7 +202,7 @@ class GpytorchGPR(object):
         self.mll = None
         self.lr = lr
         self.latent = latent
-        self.kernel = kernel
+        self.kernel_params = kernel_params
         self.max_iter = max_iterations
         # args = {'lr': lr, 'max_iter': max_iterations}
         # print('GPR model arguments:')
@@ -220,7 +225,7 @@ class GpytorchGPR(object):
             self._train_var = to_torch(var)
 
         self.likelihood = GaussianLikelihood()
-        self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel, **kwargs)
+        self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, **kwargs)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
         # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',patience=50,verbose=True)
@@ -233,8 +238,7 @@ class GpytorchGPR(object):
         self.model.train()
         self.likelihood.train()
         
-        # NOTE: with zero mean, loss seems to converge
-        # it may be a good idea to normalize the output values (check this)
+        # NOTE: with zero mean and normalized observation, loss seems to be stable even if not declining
         for i in range(self.max_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
