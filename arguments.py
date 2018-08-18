@@ -27,12 +27,15 @@ def get_args():
     parser.add_argument('--sensor_noise', default=.05, type=float, help='variance of sensor measurements')
     parser.add_argument('--num_pretrain_samples', default=20, type=int, help='number of samples in pilot survey for model initialization')
     parser.add_argument('--search_radius', default=10, type=int, help='radius of neighborhood')
-    parser.add_argument('--mi_radius', default=20, type=int, help='radius of mi set')
+    parser.add_argument('--search_radius_delta', default=0, type=float, help='increase in search radius per run')
+    parser.add_argument('--mi_radius', default=40, type=int, help='radius of mi set')
     parser.add_argument('--render', action='store_true')
     
+    parser.add_argument('--seed', default=1, type=int, help='random seed')
     parser.add_argument('--id', default=1, type=int, help='unique id of every instance')
     parser.add_argument('--save_dir', default='results', help='save directory')
     parser.add_argument('--eval_only', action='store_true', help='will not save anything in this setting')
+    parser.add_argument('--logs_wb', default='results.xls')
 
     args = parser.parse_args()
     args.save_dir = os.path.join(args.save_dir, str(args.id))

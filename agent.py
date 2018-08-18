@@ -27,6 +27,7 @@ class Agent(object):
         self._pre_train(num_samples=args.num_pretrain_samples, only_sensor=True)
         self.agent_map_pose = (0, 0)
         self.search_radius = args.search_radius
+        self.search_radius_delta = args.search_radius_delta
         self.mi_radius = args.mi_radius
 
         self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
@@ -185,7 +186,7 @@ class Agent(object):
             print('Run {}/{}'.format(i+1, num_runs))
             start = time.time()
             # find next node to visit (node contains the next path segment)
-            next_node = self._bfs_search(self.agent_map_pose, self.search_radius)
+            next_node = self._bfs_search(self.agent_map_pose, self.search_radius + int(i * self.search_radius_delta))
             
             # add samples (camera and sensor)
             self._add_samples(next_node.parents_index, self._camera_noise)

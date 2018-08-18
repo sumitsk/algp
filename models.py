@@ -73,7 +73,6 @@ class SklearnGPR(object):
 class ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, **kwargs):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self._data_dims = train_x.size(-1)
         self._set_latent_function(latent, **kwargs) 
         
         self.mean_module = ZeroMean()
@@ -85,8 +84,7 @@ class ExactGPModel(gpytorch.models.ExactGP):
         elif kernel == 'matern':
             self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
         elif kernel == 'spectral_mixture':
-            ipdb.set_trace()
-            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'])
+            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'], n_dims=train_x.size(-1))
             self.kernel_covar_module.initialize_from_data(train_x, train_y)
         else:
             raise NotImplementedError
