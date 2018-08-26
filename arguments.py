@@ -9,7 +9,7 @@ def get_args():
 
     # gp model 
     parser.add_argument('--model_type', default='gpytorch_GP', help='one from {gpytorch_GP, sklearn_GP}')
-    parser.add_argument('--lr', default=.01, help='learning rate of gpytorch model')
+    parser.add_argument('--lr', default=.01, type=float, help='learning rate of gpytorch model')
     parser.add_argument('--max_iterations', default=200, type=int, help='number of training iterations')
     parser.add_argument('--latent', default=None, help='latent function in gpytorch model')
     parser.add_argument('--kernel', default='rbf', help='kernel of GP model {rbf, matern, spectral_mixture}')

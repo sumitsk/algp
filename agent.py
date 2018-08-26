@@ -2,11 +2,13 @@ import ipdb
 import numpy as np
 from copy import deepcopy
 import matplotlib.pyplot as plt
+import seaborn as sns
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from utils import entropy_from_cov, is_valid_cell
+from utils import entropy_from_cov, is_valid_cell, Node
 from models import SklearnGPR, GpytorchGPR
 import time
+from methods import greedy
 
 
 class Agent(object):
@@ -58,14 +60,14 @@ class Agent(object):
     def _pre_train(self, num_samples, only_sensor=False):
         print('====================================================')
         print('--- Pretraining ---')
-        ind = np.random.randint(0, self.env.num_samples, num_samples)
+        ind = np.random.permutation(self.env.num_samples)[:num_samples]
         if only_sensor:
             self._add_samples(ind, self._sensor_noise)
         else:
             self._add_samples(ind[:num_samples//2], self._camera_noise)
             self._add_samples(ind[num_samples//2:], self._sensor_noise)
         self.update_model()
-        # if don't want to remember pre_train data points    
+        # if don't want to remember/condition on pre_train data points    
         # self.reset()    
         
     def _add_samples(self, indices, noise):
@@ -110,27 +112,29 @@ class Agent(object):
         elif self._strategy == 'camera_maximum_utility':
             raise NotImplementedError
         elif self._strategy == 'informative':
-            final_pred, final_var = self.run_informative(render, num_runs)
+            # final_pred, final_var = self.run_informative(render, num_runs)
+            self.run2(num_runs=num_runs, render=render)
         else:
             raise NotImplementedError
 
         # final training and test rmse and variance
-        rmse_visited = np.linalg.norm(final_pred[self._visited] - self.env.Y[self._visited])/np.sqrt(self._visited.sum())
-        rmse_unvisited = np.linalg.norm(final_pred[~self._visited] - self.env.Y[~self._visited])/np.sqrt((~self._visited).sum())
+        # rmse_visited = np.linalg.norm(final_pred[self._visited] - self.env.Y[self._visited])/np.sqrt(self._visited.sum())
+        # rmse_unvisited = np.linalg.norm(final_pred[~self._visited] - self.env.Y[~self._visited])/np.sqrt((~self._visited).sum())
         
-        print('==========================================================')
-        print('--- Final statistics --- ')
-        print('RMSE visited: {:.3f} unvisited: {:.3f}'.format(rmse_visited, rmse_unvisited))
-        print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(final_var.max(), final_var.min(), final_var.mean()))
+        # print('==========================================================')
+        # print('--- Final statistics --- ')
+        # print('RMSE visited: {:.3f} unvisited: {:.3f}'.format(rmse_visited, rmse_unvisited))
+        # print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(final_var.max(), final_var.min(), final_var.mean()))
 
         # TODO: log relevant things
         # path, camera samples, sensor samples
         # self.path, self.sensor_seq, self.stops
         # save these statistics and path and sensing locations to compare results later on
 
+    # TODO: put render in map.py file
     def _render_path(self, ax):
         # ax.set_cmap('hot')
-        plot = 1.0 - np.repeat(self.env.map.oc_grid[:, :, np.newaxis], 3, axis=2)
+        plot = 1.0 - np.repeat(self.env.map.occupied[:, :, np.newaxis], 3, axis=2)
         # highlight camera measurement
         if self.path.shape[0] > 0:
             plot[self.path[:, 0], self.path[:, 1], :] = [.75, .75, .5]
@@ -147,9 +151,10 @@ class Agent(object):
         # render path
         self._render_path(ax[0, 0])
 
+        # TODO: use seaborn for rendering
         # render plots
         axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
-        axt.set_title('Ground Truth')
+        axt.set_title('Ground Truth / Actual values')
         imt = axt.imshow(self.env.Y.reshape(self.env.shape),
             cmap='ocean', vmin=self.env.Y.min(), vmax=self.env.Y.max())
         div = make_axes_locatable(axt)
@@ -222,7 +227,7 @@ class Agent(object):
 
         return pred, var
         
-
+    # TODO: put path finding in map.py file
     def _bfs_search(self, map_pose, max_distance):
         print('Finding all possible paths')
         start = time.time()
@@ -230,7 +235,7 @@ class Agent(object):
         open_nodes = [node]
         closed_nodes = []
 
-        sz = self.env.map.oc_grid.shape
+        sz = self.env.map.occupied.shape
         gvals = np.ones(sz) * float('inf')
         gvals[map_pose] = 0
         cost = 1
@@ -238,7 +243,8 @@ class Agent(object):
         
         # NOTE: right now there is only path for every cell (which may not be a big issue because of the grid layout of the field)
         # entropy/mi are not monotonic so you can't use a branch and bound method to terminate the search (verify this) 
-        # TODO: is this is computationally expensive, then speed it up by using tree structure.
+        # TODO: if this is computationally expensive, then speed it up by using tree structure. 
+        # the most expensive part is training GP model
         while len(open_nodes) != 0:
             node = open_nodes.pop(0)
             gp_index = self.env.map_pose_to_gp_index(node.map_pose)
@@ -250,7 +256,7 @@ class Agent(object):
             for dx, dy in dx_dy:
                 new_map_pose = (map_pose[0] + dx, map_pose[1] + dy)
                 new_gval = node.gval + cost
-                if is_valid_cell(new_map_pose, sz) and self.env.map.oc_grid[new_map_pose] != 1 and new_gval < gvals[new_map_pose]:
+                if is_valid_cell(new_map_pose, sz) and self.env.map.occupied[new_map_pose] != 1 and new_gval < gvals[new_map_pose]:
                     gvals[new_map_pose] = new_gval
 
                     # do not expand nodes in the opposite direction
@@ -317,7 +323,7 @@ class Agent(object):
 
             cov_a = cov_v[vis[v_ind]].T[vis[v_ind]].T
             a_noise = 1.0/precision_v[vis[v_ind]]
-
+        
             # entropy of new A
             e1 = entropy_from_cov(cov_a + np.diag(a_noise))
             if self.utility_type == 'entropy':
@@ -342,11 +348,90 @@ class Agent(object):
         print('Time consumed: {:.4f}'.format(end - start))
         return best_node
 
+    # TODO: make a separate file which implements strategies like greedy, etc.
+    # this function selects k points greedily and then finds a path that maximises the total information gain 
+    def run2(self, num_runs, k=1, render=False):
+        if render:
+            plt.ion()
+            fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+            ipdb.set_trace()
 
-class Node(object):
-    def __init__(self, map_pose, gval, utility, parents_index, path=np.empty((0, 2))):
-        self.map_pose = map_pose
-        self.gval = gval
-        self.utility = utility
-        self.parents_index = parents_index[:]
-        self.path = np.copy(path)
+        # k - number of samples per run
+        for i in range(num_runs):
+
+            # select k samples greedily (all of which will be collected by sensor)
+            cov = self.gp.cov_mat(self.env.X)
+            new_samples, utilities = greedy(self.env.X, self._visited, cov, k, pose=self.agent_map_pose, locs=self.env.locs, max_distance=8)
+            # ipdb.set_trace()
+
+            new_locs = self.env.gp_index_to_map_pose(new_samples)
+            new_locs = [tuple(x) for x in new_locs]
+            # new_samples are the gp indices here
+            # convert them to map poses and select a goal location
+            print('------ Finding paths ---------')
+            print('waypoints ', new_locs)
+            start = time.time()
+            if i==0:
+                delta = None
+            else:
+                delta = self.path[-1][0] - self.path[-2][0]
+            paths = self.env.map.all_paths(self.agent_map_pose, new_locs, delta)
+            
+            # ipdb.set_trace()
+            # convert map poses to gp index
+            all_utilities = []
+            all_indices = []
+
+            for path in paths:
+                indices = []
+                for loc in path:
+                    idx = self.env.map_pose_to_gp_index(tuple(loc))
+                    if idx is not None:
+                        indices.append(idx)
+                all_indices.append(indices)
+                temp_cov = cov[indices].T[indices].T
+                var = np.eye(len(indices))*self._camera_noise
+                var[-1,-1] = self._sensor_noise
+                ut = entropy_from_cov(temp_cov + var)
+                all_utilities.append(ut)        
+
+            if len(paths) == 0:
+                ipdb.set_trace()
+                paths = self.env.map.all_paths(self.agent_map_pose, new_locs, delta)
+                            
+            idx = np.argmax(all_utilities)
+
+            best_indices = all_indices[idx]
+            best_path = paths[idx]
+            # add samples (camera and sensor)
+            self._add_samples(best_indices[:-1], self._camera_noise)
+            self._add_samples([best_indices[-1]], self._sensor_noise)
+
+            # update GP model
+            if i % self.update_every == 0:
+                self.update_model()
+
+            # update agent statistics
+            self.path = np.concatenate([self.path, best_path[1:]], axis=0).astype(int)
+            self.agent_map_pose = tuple(self.path[-1])
+
+            self.sensor_seq = np.concatenate([self.sensor_seq, np.stack(new_locs)]).astype(int)
+            self.stops = np.concatenate([self.stops, np.stack(new_locs)]).astype(int)
+    
+            print('\n--- Prediction --- ')
+            pred, var = self.predict()
+            # TODO: max variance is often times quite low (check this)
+            # TODO: implement a suitable terminating condition
+            # if np.max(var) < .01:
+            #     print('Converged')
+            #     break
+            print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
+
+            if render:
+                self.render(fig, ax, pred, var)
+                plt.pause(.1)
+            end = time.time()
+            print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, end - start))
+
+        return pred, var
+        

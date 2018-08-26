@@ -4,9 +4,30 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import torch
 import pickle 
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import minimum_spanning_tree
+from scipy.spatial.distance import pdist, squareform
+from copy import deepcopy
 
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
+
+
+class Node(object):
+    def __init__(self, map_pose, gval, utility, parents_index, path=None):
+        self.map_pose = map_pose
+        self.gval = gval
+        self.utility = utility
+        self.parents_index = parents_index[:]
+        self.path = np.empty((0, 2)) if path is None else np.copy(path)
+        
+
+class BFSNode(object):
+    def __init__(self, pose, gval, visited, path=None):
+        self.pose = pose
+        self.gval = gval
+        self.path = [tuple(self.pose)] if path is None else path 
+        self.visited = np.copy(visited)
 
 
 def to_torch(arr):
@@ -101,60 +122,64 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
     return grid, y/y.max()
 
 
-def mi_change(x, a, a_bar, gp, x_noise_var=None, a_noise_var=None, a_bar_noise_var=None):
-    e1 = conditional_entropy(x, a, gp, x_noise_var, a_noise_var)
-    e2 = conditional_entropy(x, a_bar, gp, x_noise_var, a_bar_noise_var)
+def mi_change(x, a, a_bar, gp, x_variance=None, a_variance=None, a_bar_variance=None):
+    e1 = conditional_entropy(x, a, gp, x_variance, a_variance)
+    e2 = conditional_entropy(x, a_bar, gp, x_variance, a_bar_variance)
     info = e1 - e2
     return info
 
 
-def process_noise_var(dim, noise_var):
-    if noise_var is None:
-        noise_var_ = 0.0
-    elif isinstance(noise_var, int) or isinstance(noise_var, float):
-        noise_var_ = noise_var * np.eye(dim)
-    elif isinstance(noise_var, list):
-        assert len(noise_var) == dim, 'Size mismatch!!'
-        noise_var_ = np.diag(noise_var)
-    elif isinstance(noise_var, np.ndarray):
-        if noise_var.ndim == 1:
-            assert len(noise_var) == dim, 'Size mismatch!!'
-            noise_var_ = np.diag(noise_var)
-        elif noise_var.ndim == 2:
-            assert noise_var.shape[0] == noise_var.shape[1] == dim, 'Size mismatch'
-            noise_var_ = noise_var
+def process_variance(dim, variance):
+    if variance is None:
+        variance_ = 0.0
+    elif isinstance(variance, int) or isinstance(variance, float):
+        variance_ = variance * np.eye(dim)
+    elif isinstance(variance, list):
+        assert len(variance) == dim, 'Size mismatch!!'
+        variance_ = np.diag(variance)
+    elif isinstance(variance, np.ndarray):
+        if variance.ndim == 1:
+            assert len(variance) == dim, 'Size mismatch!!'
+            variance_ = np.diag(variance)
+        elif variance.ndim == 2:
+            assert variance.shape[0] == variance.shape[1] == dim, 'Size mismatch'
+            variance_ = variance
     else:
         raise NotImplementedError
-    return noise_var_
+    return variance_
 
 
-def entropy(x, gp, x_noise_var=0):
+def entropy(x, gp, x_variance=0):
     x_ = x.reshape(-1, len(x)) if x.ndim == 1 else x
 
     # NOTE: because of noise term, even if there are repeated entries, the det is not 0
-    x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
-    cov = gp.cov_mat(x_, x_, x_noise_var_)
+    x_variance_ = process_variance(x_.shape[0], x_variance)
+    cov = gp.cov_mat(x_, x_, x_variance_)
     return entropy_from_cov(cov)
 
 
-def entropy_from_cov(cov):
-    ent = cov.shape[0] * CONST + .5 * np.linalg.slogdet(cov)[1].item()
+def entropy_from_cov(cov, constant=CONST):
+    # constanst is the first term in entropy calculation
+    # H = constant * k + 1/2 * log(det(cov))
+    if constant is None:
+        constant = CONST
+    ent = cov.shape[0] * constant + .5 * np.linalg.slogdet(cov)[1].item()
     return ent
 
 
-def conditional_entropy(x, a, gp, x_noise_var, a_noise_var, sigma_aa_inv=None):
+def conditional_entropy(x, a, gp, x_variance, a_variance, sigma_aa_inv=None):
     assert a.ndim == 2, 'Matrix A must be 2-dimensional!'
     if a.shape[0] == 0:
-        return entropy(x, gp, x_noise_var)
+        return entropy(x, gp, x_variance)
 
     x_ = x.reshape(-1, a.shape[-1])
-    x_noise_var_ = process_noise_var(x_.shape[0], x_noise_var)
-    a_noise_var_ = process_noise_var(a.shape[0], a_noise_var)
+    x_variance_ = process_variance(x_.shape[0], x_variance)
+    a_variance_ = process_variance(a.shape[0], a_variance)
 
     if sigma_aa_inv is None:
-        sigma_aa_inv = np.linalg.inv(gp.cov_mat(a, a, a_noise_var_))
+        sigma_aa_inv = np.linalg.inv(gp.cov_mat(a, a, a_variance_))
     sigma_xa = gp.cov_mat(x_, a)
-    sigma_xx = gp.cov_mat(x_, x_, x_noise_var_)
+    sigma_xx = gp.cov_mat(x_, x_, x_variance_)
     cov = sigma_xx - np.dot(np.dot(sigma_xa, sigma_aa_inv), sigma_xa.T)
     return entropy_from_cov(cov)
 
@@ -182,12 +207,17 @@ def zero_mean_unit_variance(data, mean=None, std=None):
     return (data - mean) / std
 
 
+def normalize(data, col_max):
+    return data/col_max
+
+
 def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
                title1=None, title2=None, title3=None, fig=None, ax=None):
     if fig is None or ax is None:
         fig, ax = plt.subplots(1, 3, figsize=(12, 4))
         axt, axp, axv = ax
 
+    # TODO: use seaborn 
     title1 = 'Ground truth' if title1 is None else title1
     axt.set_title(title1)
     imt = axt.imshow(plot1.reshape(num_rows, num_cols),
@@ -218,3 +248,54 @@ def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
         fig.suptitle(main_title)
     return fig
 
+
+def compute_rmse(true, pred):
+    return np.linalg.norm(true.squeeze() - pred.squeeze()) / np.sqrt(len(true))
+
+
+def euclidean_distance(p0, p1):
+    return ((p0[0] - p1[0])**2 + (p0[1] - p1[1])**2)**.5
+
+
+def manhattan_distance(p0, p1):
+    return abs(p0[0] - p1[0]) + abs(p0[1] - p1[1])    
+    
+
+# minimum spanning tree
+def mst(cities):
+    dist_mat = squareform(pdist(cities, metric='minkowski', p=1))
+    x = csr_matrix(dist_mat)
+    tcsr = minimum_spanning_tree(x)
+
+    total_distance = tcsr.toarray().flatten().sum()
+
+
+def greedy_minimum_total_distance(cities):
+    # suboptimal (select the nearest city)
+    # mat = squareform(pdist(cities, metric='minkowski', p=1))
+    # n = mat.shape[0]
+    # np.fill_diagonal(mat, np.inf)
+    # idx = 0
+    # total_dist = 0
+    # for i in range(n-1):
+    #     best = mat[idx,:].argmin()
+    #     total_dist += mat[idx, best]
+    #     mat[:, best] = np.inf
+    #     mat[best, idx] = np.inf
+    #     idx = best
+
+    # return total_dist
+
+
+    # assuming cities[0] is the one where we start
+    dist = 0
+    temp = deepcopy(cities)
+    idx = 0
+    while len(temp) > 1:
+        loc = temp.pop(idx)
+        all_dists = [manhattan_distance(loc, x) for x in temp]
+        min_dist = min(all_dists)
+        dist += min_dist
+        idx = all_dists.index(min_dist)
+
+    return dist

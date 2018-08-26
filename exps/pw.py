@@ -31,7 +31,7 @@ def draw_3_plots(num_rows, num_cols, true_y, y1, y2,
 
     axv.set_title('Predicted values from GP with genotype embedding')
     imv = axv.imshow(y2.reshape(num_rows, num_cols),
-    				 cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
+                     cmap='ocean', vmin=true_y.min(), vmax=true_y.max())
     divv = make_axes_locatable(axv)
     caxv = divv.new_horizontal(size='5%', pad=.05)
     fig.add_axes(caxv)
@@ -58,12 +58,12 @@ def fit_and_eval(gp, x, y, x_train, y_train, **kwargs):
     return mu, std, rmse
 
 def evaluate(gp, x, y):
-	mu = gp.predict(x)
-	rmse = compute_rmse(y, mu)
-	return rmse
+    mu = gp.predict(x)
+    rmse = compute_rmse(y, mu)
+    return rmse
 
 def compute_rmse(y, mu):
-	return np.linalg.norm(y - mu) / np.sqrt(len(y))
+    return np.linalg.norm(y - mu) / np.sqrt(len(y))
 
 # file with field data
 # feature = 'plant_width_mean'

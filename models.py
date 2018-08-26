@@ -14,7 +14,7 @@ import numpy as np
 from scipy.linalg import cholesky, cho_solve, solve_triangular
 import warnings
 import ipdb
-from utils import to_torch
+from utils import to_torch, to_numpy
 from pprint import pprint
 
 
@@ -73,12 +73,12 @@ class SklearnGPR(object):
 class ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, **kwargs):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self._set_latent_function(latent, **kwargs) 
+        self._set_latent_function(latent, **kwargs)
         
         self.mean_module = ZeroMean()
         ard_num_dims = self.latent_func.out_dims if self.latent_func.out_dims is not None else train_x.size(-1)
         
-        kernel = kernel_params['type']
+        kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
         if kernel is None or kernel == 'rbf':
             self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel == 'matern':
@@ -137,15 +137,15 @@ class LinearLatentFunction(nn.Module):
 
 
 class NonLinearLatentFunction(nn.Module):
-    def __init__(self, input_dim, f1_dim, f2_dim):
+    def __init__(self, input_dim=6, f1_dim=4, f2_dim=4):
         super(NonLinearLatentFunction, self).__init__()
-        self.fc1 = nn.Linear(input_dim, f1_dim)
-        self.fc2 = nn.Linear(f1_dim, f2_dim)
+        self.fc1 = nn.Linear(input_dim, f1_dim, bias=False)
+        self.fc2 = nn.Linear(f1_dim, f2_dim, bias=False)
         self.out_dims = f2_dim
         # self.apply(weights_init)
 
     def forward(self, inp):
-        x = F.relu(self.fc1(inp))
+        x = F.tanh(self.fc1(inp))
         x = self.fc2(x)
         return x
 
@@ -236,11 +236,11 @@ class GpytorchGPR(object):
         self.model.train()
         self.likelihood.train()
         
-        # NOTE: with zero mean and normalized observation, loss seems to be stable even if not declining
+        # NOTE: with zero mean and low range observation (0-1 types), loss stabilises
         for i in range(self.max_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
-            loss = -self.mll(output, self._norm_train_y) # /len(y)
+            loss = -self.mll(output, self._norm_train_y)
             loss.backward()
             self.optimizer.step()
             # self.lr_scheduler.step(loss)
@@ -305,3 +305,9 @@ class GpytorchGPR(object):
                 return pred_mean, y_cov
 
             return pred_mean
+
+    def get_embeddings(self, x):
+        with torch.no_grad():
+            x_ = to_torch(x)
+            embeds = self.model.latent_func(x_)
+            return to_numpy(embeds)

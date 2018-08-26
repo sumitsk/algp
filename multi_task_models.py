@@ -78,7 +78,14 @@ class MultitaskGP(object):
             loss = -self.mll(output, self._norm_train_y)
             loss.backward()
             self.optimizer.step()
-            print(i, loss.item())
+            # print(i, loss.item())
+            if i == 0:
+                initial_ll = -loss.item()
+            elif i == self.max_iter - 1:
+                final_ll = -loss.item()
+
+        print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
+
 
     def predict(self, x):
         self.model.eval()
