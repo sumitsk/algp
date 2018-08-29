@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt 
 import ipdb
-from utils import manhattan_distance, BFSNode, is_valid_cell, greedy_minimum_total_distance
+from utils import manhattan_distance, BFSNode, is_valid_cell
 from copy import deepcopy
 
 
@@ -10,7 +10,7 @@ class Map(object):
     def __init__(self,
                  num_gp_rows=15,
                  num_gp_cols=37,
-                 num_row_passes=4,
+                 num_row_passes=2,
                  row_pass_width=1
                  ):
 
@@ -26,6 +26,7 @@ class Map(object):
         self._shape = self._compute_map_dimensions()
         self.stack_len = self.num_gp_rows // (self.num_row_passes + 1)
         self.row_pass_indices = self._get_row_pass_indices()
+        self.obstacle_cols = np.arange(0, self.shape[1], 2)
         
         # 1 if obstacle 0 otherwise
         self.occupied = self._build_occupied()
@@ -138,7 +139,6 @@ class Map(object):
             # max_length = 2.5 * minimum_distance_to_go(start, waypoints)
             max_length = 1 * self.min_dist_to_goal(start, waypoints[0], delta_input) + self.stack_len
 
-        # ipdb.set_trace()
         cost = 1
         dx_dy = [(-1, 0), (1, 0), (0, 1), (0, -1)]
 

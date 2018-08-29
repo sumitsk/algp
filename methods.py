@@ -1,5 +1,6 @@
 import numpy as np
 from utils import entropy_from_cov, manhattan_distance
+import ipdb
 
 
 # greedily select samples from the unvisited locations
@@ -29,6 +30,8 @@ def greedy(X, sampled, cov, num_samples, pose=None, locs=None, max_distance=None
 			if sampled[i]:
 				continue
 			if distance_constraint:
+				ipdb.set_trace()
+				# TODO: bug: distance between two locations is not manhattan distance
 				if manhattan_distance(pose, locs[i]) > max_distance:
 					continue
 			org = sampled[i]

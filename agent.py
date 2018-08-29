@@ -6,9 +6,10 @@ import seaborn as sns
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from utils import entropy_from_cov, is_valid_cell, Node
+from graph_utils import get_heading
 from models import SklearnGPR, GpytorchGPR
 import time
-from methods import greedy
+import warnings
 
 
 class Agent(object):
@@ -28,6 +29,7 @@ class Agent(object):
         self.reset()
         self._pre_train(num_samples=args.num_pretrain_samples, only_sensor=True)
         self.agent_map_pose = (0, 0)
+        self.agent_heading = (1, 0)
         self.search_radius = args.search_radius
         self.search_radius_delta = args.search_radius_delta
         self.mi_radius = args.mi_radius
@@ -104,7 +106,14 @@ class Agent(object):
         start = time.time()
         self.gp.fit(x, y, var)
         end = time.time()
+        self._post_update()
         print('Time consumed: {}'.format(end - start))
+
+    def _post_update(self):
+        alpha = 1e-5
+        self.cov_matrix = self.gp.cov_mat(self.env.X) + alpha * np.eye(self.env.num_samples)
+        min_eig = np.linalg.eigvalsh(self.cov_matrix).min()
+        self.entropy_constant = -.5 * np.log(min_eig)
 
     def run(self, render=False, num_runs=40):
         if self._strategy == 'sensor_maximum_utility':
@@ -348,64 +357,57 @@ class Agent(object):
         print('Time consumed: {:.4f}'.format(end - start))
         return best_node
 
-    # TODO: make a separate file which implements strategies like greedy, etc.
     # this function selects k points greedily and then finds a path that maximises the total information gain 
-    def run2(self, num_runs, k=1, render=False):
+    def run2(self, num_runs, num_sensor_samples=5, render=False):
         if render:
             plt.ion()
             fig, ax = plt.subplots(2, 2, figsize=(12, 8))
-            ipdb.set_trace()
 
-        # k - number of samples per run
         for i in range(num_runs):
-
-            # select k samples greedily (all of which will be collected by sensor)
-            cov = self.gp.cov_mat(self.env.X)
-            new_samples, utilities = greedy(self.env.X, self._visited, cov, k, pose=self.agent_map_pose, locs=self.env.locs, max_distance=8)
-            # ipdb.set_trace()
+            # greedily select samples greedily (all of which will be collected by sensor)
+            new_samples, utilities = self.greedy(num_sensor_samples)
 
             new_locs = self.env.gp_index_to_map_pose(new_samples)
             new_locs = [tuple(x) for x in new_locs]
             # new_samples are the gp indices here
-            # convert them to map poses and select a goal location
             print('------ Finding paths ---------')
             print('waypoints ', new_locs)
             start = time.time()
-            if i==0:
-                delta = None
-            else:
-                delta = self.path[-1][0] - self.path[-2][0]
-            paths = self.env.map.all_paths(self.agent_map_pose, new_locs, delta)
             
-            # ipdb.set_trace()
-            # convert map poses to gp index
+            paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.agent_map_pose, self.agent_heading, new_locs)
+            end = time.time()
+            print('\nTime consumed {}'.format(end - start))
+
             all_utilities = []
-            all_indices = []
 
-            for path in paths:
-                indices = []
-                for loc in path:
-                    idx = self.env.map_pose_to_gp_index(tuple(loc))
-                    if idx is not None:
-                        indices.append(idx)
-                all_indices.append(indices)
-                temp_cov = cov[indices].T[indices].T
-                var = np.eye(len(indices))*self._camera_noise
-                var[-1,-1] = self._sensor_noise
-                ut = entropy_from_cov(temp_cov + var)
-                all_utilities.append(ut)        
+            print('------ Finding best path ----------')
+            start = time.time()
+            if len(paths_indices) == 1:
+                best_idx = 0
+            else:
+                for indices in paths_indices:
+                    sampled = np.copy(self._visited)
+                    precision = np.copy(self.obs_precision)
+                
+                    sampled[indices] = True
+                    precision[indices] = self._update_precision(precision[indices], 1.0/self._camera_noise)
+                    precision[new_samples] = 1.0/self._sensor_noise
 
-            if len(paths) == 0:
-                ipdb.set_trace()
-                paths = self.env.map.all_paths(self.agent_map_pose, new_locs, delta)
-                            
-            idx = np.argmax(all_utilities)
+                    temp_cov = self.cov_matrix[indices].T[indices].T + np.diag(1.0/precision[indices])
+                    ut = entropy_from_cov(temp_cov)
+                    all_utilities.append(ut)        
 
-            best_indices = all_indices[idx]
-            best_path = paths[idx]
+                best_idx = np.argmax(all_utilities)
+
+            best_path_indices = paths_indices[best_idx]
+            best_path = self.env.get_path_from_checkpoints(paths_checkpoints[best_idx])
+            end = time.time()
+            print('\nTime consumed {}'.format(end - start))
+
+
             # add samples (camera and sensor)
-            self._add_samples(best_indices[:-1], self._camera_noise)
-            self._add_samples([best_indices[-1]], self._sensor_noise)
+            self._add_samples(best_path_indices, self._camera_noise)
+            self._add_samples(new_samples, self._sensor_noise)
 
             # update GP model
             if i % self.update_every == 0:
@@ -414,6 +416,7 @@ class Agent(object):
             # update agent statistics
             self.path = np.concatenate([self.path, best_path[1:]], axis=0).astype(int)
             self.agent_map_pose = tuple(self.path[-1])
+            self.agent_heading = get_heading(self.path[-1], self.path[-2])
 
             self.sensor_seq = np.concatenate([self.sensor_seq, np.stack(new_locs)]).astype(int)
             self.stops = np.concatenate([self.stops, np.stack(new_locs)]).astype(int)
@@ -435,3 +438,63 @@ class Agent(object):
 
         return pred, var
         
+
+    def greedy(self, num_samples):
+        # greedily select samples 
+        # TODO: implement distance constraint if required (need to do an efficient lookup of distance between two nodes)
+        # if all three are provided, then distance constraint will be applied
+        # distance_constraint = pose is not None and locs is not None and max_distance is not None
+
+        # TODO: see if information gain criteria can also be modified to be monotonic
+
+        n = self.env.num_samples
+        sampled = np.copy(self._visited)
+        precision = np.copy(self.obs_precision)
+        cumm_utilities = []
+        new_samples = []
+        cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(1.0/precision[sampled])
+        ent_v = entropy_from_cov(cov_v, self.entropy_constant)
+
+        for _ in range(num_samples):
+            utilities = np.full(n, 0.0)
+            cond = ent_v + sum(cumm_utilities)
+
+            for i in range(n):
+                # if entropy is monotonic, then this step is not necessary (however better for efficiency)
+                # assuming, precision is updated in the "max" fashion, in the latter case, this will be always be false 
+                if sampled[i] and 1.0/precision[i]==self._sensor_noise:
+                    continue
+                
+                # if distance_constraint:
+                #     # TODO: bug: distance between two locations is not manhattan distance
+                #     if manhattan_distance(pose, locs[i]) > max_distance:
+                #         continue
+
+                # modify sampled and precision (temporarily)
+                org_sampled = sampled[i]
+                org_precision = precision[i]
+                sampled[i] = True
+                precision[i] = self._update_precision(org_precision, 1.0/self._sensor_noise)
+
+                # a - set of all sampled locations 
+                cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(1.0/precision[sampled])
+                ent_a = entropy_from_cov(cov_a, self.entropy_constant)
+                utilities[i] = ent_a - cond
+
+                # reset sampled and precision
+                sampled[i] = org_sampled
+                precision[i] = org_precision
+
+            best_sample = np.argmax(utilities)
+            cumm_utilities.append(utilities[best_sample])
+            new_samples.append(best_sample)
+
+            # update sampled and precision of best sample location
+            sampled[best_sample] = True
+            precision[best_sample] = self._update_precision(precision[best_sample], 1.0/self._sensor_noise)
+
+            # if min(utilities) < 0:
+            #     warnings.warn('Utility is negative!!')
+            #     ipdb.set_trace()
+
+        return new_samples, cumm_utilities
