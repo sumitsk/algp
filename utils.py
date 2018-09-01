@@ -4,10 +4,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import torch
 import pickle 
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import minimum_spanning_tree
-from scipy.spatial.distance import pdist, squareform
-from copy import deepcopy
 
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
@@ -159,7 +155,7 @@ def entropy(x, gp, x_variance=0):
 
 
 def entropy_from_cov(cov, constant=CONST):
-    # constanst is the first term in entropy calculation
+    # constant is the first term in entropy calculation
     # H = constant * k + 1/2 * log(det(cov))
     if constant is None:
         constant = CONST
@@ -185,6 +181,7 @@ def conditional_entropy(x, a, gp, x_variance, a_variance, sigma_aa_inv=None):
 
 
 def is_valid_cell(cell, grid_shape):
+    # check if cell lies inside the grid or not
     if 0 <= cell[0] < grid_shape[0] and 0 <= cell[1] < grid_shape[1]:
         return True
     return False
@@ -207,7 +204,9 @@ def zero_mean_unit_variance(data, mean=None, std=None):
     return (data - mean) / std
 
 
-def normalize(data, col_max):
+def normalize(data, col_max=None):
+    # divide each column with the corresponding max value
+    col_max = data.max(0) if col_max is None else col_max
     return data/col_max
 
 
@@ -250,52 +249,25 @@ def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
 
 
 def compute_rmse(true, pred):
+    # return root mean square error betwee true values and predictions
     return np.linalg.norm(true.squeeze() - pred.squeeze()) / np.sqrt(len(true))
 
 
 def euclidean_distance(p0, p1):
+    # return euclidean distance between p0 and p1
     return ((p0[0] - p1[0])**2 + (p0[1] - p1[1])**2)**.5
 
 
 def manhattan_distance(p0, p1):
+    # return manhattan distance between p0 and p1
     return abs(p0[0] - p1[0]) + abs(p0[1] - p1[1])    
-    
-
-# minimum spanning tree
-def mst(cities):
-    dist_mat = squareform(pdist(cities, metric='minkowski', p=1))
-    x = csr_matrix(dist_mat)
-    tcsr = minimum_spanning_tree(x)
-
-    total_distance = tcsr.toarray().flatten().sum()
 
 
-def greedy_minimum_total_distance(cities):
-    # suboptimal (select the nearest city)
-    # mat = squareform(pdist(cities, metric='minkowski', p=1))
-    # n = mat.shape[0]
-    # np.fill_diagonal(mat, np.inf)
-    # idx = 0
-    # total_dist = 0
-    # for i in range(n-1):
-    #     best = mat[idx,:].argmin()
-    #     total_dist += mat[idx, best]
-    #     mat[:, best] = np.inf
-    #     mat[best, idx] = np.inf
-    #     idx = best
-
-    # return total_dist
-
-
-    # assuming cities[0] is the one where we start
-    dist = 0
-    temp = deepcopy(cities)
-    idx = 0
-    while len(temp) > 1:
-        loc = temp.pop(idx)
-        all_dists = [manhattan_distance(loc, x) for x in temp]
-        min_dist = min(all_dists)
-        dist += min_dist
-        idx = all_dists.index(min_dist)
-
-    return dist
+def fit_and_eval(gp, train_x, train_y, test_x, test_y, disp=False):
+    # fit a gp model and evaluate on the training and testing dataset
+    gp.fit(train_x, train_y, disp=disp)
+    pred_train = gp.predict(train_x)
+    pred_test = gp.predict(test_x)
+    train_rmse = compute_rmse(train_y, pred_train)
+    test_rmse = compute_rmse(test_y, pred_test)
+    return train_rmse, test_rmse

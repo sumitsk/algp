@@ -112,7 +112,9 @@ class Agent(object):
     def _post_update(self):
         alpha = 1e-5
         self.cov_matrix = self.gp.cov_mat(self.env.X) + alpha * np.eye(self.env.num_samples)
-        min_eig = np.linalg.eigvalsh(self.cov_matrix).min()
+        eig_vals = np.linalg.eigvalsh(self.cov_matrix)
+        min_eig = min(eig_vals)
+        max_eig = max(eig_vals)
         self.entropy_constant = -.5 * np.log(min_eig)
 
     def run(self, render=False, num_runs=40):
@@ -236,7 +238,6 @@ class Agent(object):
 
         return pred, var
         
-    # TODO: put path finding in map.py file
     def _bfs_search(self, map_pose, max_distance):
         print('Finding all possible paths')
         start = time.time()
@@ -358,23 +359,25 @@ class Agent(object):
         return best_node
 
     # this function selects k points greedily and then finds a path that maximises the total information gain 
-    def run2(self, num_runs, num_sensor_samples=5, render=False):
+    def run2(self, num_runs, num_sensor_samples=1, render=False):
         if render:
             plt.ion()
             fig, ax = plt.subplots(2, 2, figsize=(12, 8))
 
+        allowance = 1
         for i in range(num_runs):
-            # greedily select samples greedily (all of which will be collected by sensor)
+            # greedily select samples (all of which will be collected by sensor)
             new_samples, utilities = self.greedy(num_sensor_samples)
-
+            # new_samples are gp indices here
+            
             new_locs = self.env.gp_index_to_map_pose(new_samples)
             new_locs = [tuple(x) for x in new_locs]
-            # new_samples are the gp indices here
             print('------ Finding paths ---------')
             print('waypoints ', new_locs)
-            start = time.time()
             
-            paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.agent_map_pose, self.agent_heading, new_locs)
+            start = time.time()
+            new_locs = [(2,0), (2,4)]
+            paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.agent_map_pose, self.agent_heading, new_locs, allowance)
             end = time.time()
             print('\nTime consumed {}'.format(end - start))
 

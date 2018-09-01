@@ -5,7 +5,7 @@ from map import Map
 from utils import load_data, zero_mean_unit_variance, is_valid_cell
 from networkx import nx
 from copy import deepcopy
-from graph_utils import get_new_nodes_and_edges, path_cost, upper_bound, edge_cost, get_heading, distance_to_go, node_action
+from graph_utils import get_new_nodes_and_edges, path_cost, edge_cost, get_heading, node_action, lower_bound_path_cost
 
 class FieldEnv(object):
     def __init__(self, num_rows=15, num_cols=15, data_file=None):
@@ -69,6 +69,7 @@ class FieldEnv(object):
         self.backup_graph = deepcopy(self.graph)
 
     def _pre_search(self, start, waypoints):
+        # add start and waypoints to the graph and remove redundant ones
         new_nodes, new_edges, remove_edges = get_new_nodes_and_edges(self.graph, self.map, [start] + waypoints)
         self.graph.add_nodes_from(new_nodes)
         self.graph.add_edges_from(new_edges)
@@ -92,8 +93,11 @@ class FieldEnv(object):
         gvals = [0]
         closed_list = []
 
-        # an upper bound on the shortest path length (move to the nearest waypoint)
-        shortest_length = upper_bound(start, heading, waypoints, self.graph, self.extra_cost)
+        # an upper bound on the shortest path length (always moving to the nearest waypoint)
+        shortest_length = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
+
+        # allowed extra length than the shortest path length
+        extra = 0 if allowance == 1 else (allowance-1)*shortest_length
 
         # for efficieny, it will be beneficial if nodes are expanded in increasing order of gval
         while len(open_list) > 0:
@@ -104,6 +108,7 @@ class FieldEnv(object):
             ngh = self.graph.neighbors(node)
             for new_node in ngh:
                 cost = edge_cost(node, tree_node[2], new_node)
+                # can't move back to its parent node (or can't take a u-turn)
                 if cost == np.inf:
                     continue
                 new_gval = gval + cost
@@ -117,31 +122,32 @@ class FieldEnv(object):
                 new_tree_node = (new_node, new_tree_node_visited, new_heading)
 
                 # this can be multiplied by an allowance factor to allow paths greater than shortest length
-                to_go = distance_to_go(new_tree_node, waypoints)
-                if new_gval + to_go > allowance * shortest_length:
+                min_dist_to_go = lower_bound_path_cost(new_tree_node, waypoints)
+                if new_gval + min_dist_to_go > allowance * shortest_length:
                     continue
                 
-                action = node_action(tree, new_tree_node)
-                if action == 'merge':
-                    tree.add_edge(tree_node, new_tree_node)
-                    continue
-                # for informative paths which can be greater than the shortest path, it is not optimum to discard paths
-                if allowance==1 and action == 'discard':
-                    continue
+                # this creates loops in the tree 
+                # action = node_action(tree, new_tree_node)
+                # if action == 'merge':
+                #     tree.add_edge(tree_node, new_tree_node, weight=cost)
+                #     continue
+                # # for informative paths greater than the shortest path, it is not optimum to discard paths
+                # if extra==0 and action == 'discard':
+                #     continue
             
                 # add new node to tree
                 tree.add_node(new_tree_node, pos=new_tree_node[0])
-                tree.add_edge(tree_node, new_tree_node)
+                tree.add_edge(tree_node, new_tree_node, weight=cost)
 
                 if sum(new_tree_node_visited) == nw:
                     shortest_length = min(new_gval, shortest_length)
+                    # extra = (allowance-1)*shortest_length
                     closed_list.append(new_tree_node)
-
                 else:
                     open_list.append(new_tree_node)
                     gvals.append(new_gval)
                     
-        all_paths_gen = [nx.all_shortest_paths(tree, tree_start_node, t) for t in closed_list]
+        all_paths_gen = [nx.all_shortest_paths(tree, tree_start_node, t, weight='weight') for t in closed_list]
         all_paths = []
         all_paths_indices = []
         all_paths_cost = []
@@ -158,6 +164,35 @@ class FieldEnv(object):
                 all_paths.append(locs)
                 all_paths_indices.append(gp_indices)
                 all_paths_cost.append(cost)
+
+        ipdb.set_trace()
+        # visualize tree 
+        import matplotlib.pyplot as plt
+        pos = nx.get_node_attributes(tree, 'pos')
+        nx.draw_networkx(tree, pos)
+        plt.show()
+
+        ipdb.set_trace()
+        
+        temp_gen = [nx.all_simple_paths(tree, tree_start_node, t) for t in closed_list]
+        temp_paths = []
+        temp_paths_indices = []
+        temp_paths_costs = []
+        for gen in temp_gen:
+            for i, path in enumerate(gen):
+                locs = [p[0] for p in path]
+
+                gp_indices = [self.gp_indices_between(locs[i],locs[i+1]) for i in range(len(path)-1)]
+                # need to add the last sampling location 
+                gp_indices = [item for sublist in gp_indices for item in sublist] + [self.map_pose_to_gp_index(locs[-1])]
+
+                cost = path_cost(locs)
+                # print(i, locs, cost)
+                temp_paths.append(locs)
+                temp_paths_indices.append(gp_indices)
+                temp_paths_costs.append(cost)
+
+        ipdb.set_trace()
 
         self._post_search()
         return all_paths, all_paths_indices, all_paths_cost

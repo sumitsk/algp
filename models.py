@@ -71,12 +71,12 @@ class SklearnGPR(object):
 
     
 class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, **kwargs):
+    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, latent_params=None):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self._set_latent_function(latent, **kwargs)
+        self._set_latent_function(latent, latent_params)
         
         self.mean_module = ZeroMean()
-        ard_num_dims = self.latent_func.out_dims if self.latent_func.out_dims is not None else train_x.size(-1)
+        ard_num_dims = self.latent_func.embed_dim if self.latent_func.embed_dim is not None else train_x.size(-1)
         
         kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
         if kernel is None or kernel == 'rbf':
@@ -96,15 +96,16 @@ class ExactGPModel(gpytorch.models.ExactGP):
         else:
             self.covar_module = self.kernel_covar_module
         
-    def _set_latent_function(self, latent, **kwargs):
+    def _set_latent_function(self, latent, latent_params):
         if latent is None or latent == 'identity':
             self.latent_func = IdentityLatentFunction()
         elif latent == 'linear':
-            self.latent_func = LinearLatentFunction(**kwargs)
+            self.latent_func = LinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'])
         elif latent == 'non_linear':
-            self.latent_func = NonLinearLatentFunction(**kwargs)
-        elif latent == 'field':
-            self.latent_func = FieldLatentFunction(**kwargs)
+            self.latent_func = NonLinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'], latent_params['embed_dim'])
+        # NOTE: not using for now
+        # elif latent == 'field':
+        #     self.latent_func = FieldLatentFunction(latent_params['input_dim'], )
         else:
             raise NotImplementedError
 
@@ -119,7 +120,7 @@ class IdentityLatentFunction(nn.Module):
     def __init__(self):
         super(IdentityLatentFunction, self).__init__()
         # self.apply(weights_init)
-        self.out_dims = None
+        self.embed_dim = None
 
     def forward(self, x):
         return x
@@ -129,7 +130,7 @@ class LinearLatentFunction(nn.Module):
     def __init__(self, input_dim, embed_dim):
         super(LinearLatentFunction, self).__init__()
         self.fc = nn.Linear(input_dim, embed_dim)
-        self.out_dims = embed_dim
+        self.embed_dim = embed_dim
         # self.apply(weights_init)
 
     def forward(self, x):
@@ -137,11 +138,11 @@ class LinearLatentFunction(nn.Module):
 
 
 class NonLinearLatentFunction(nn.Module):
-    def __init__(self, input_dim=6, f1_dim=4, f2_dim=4):
+    def __init__(self, input_dim, f1_dim, embed_dim):
         super(NonLinearLatentFunction, self).__init__()
         self.fc1 = nn.Linear(input_dim, f1_dim, bias=False)
-        self.fc2 = nn.Linear(f1_dim, f2_dim, bias=False)
-        self.out_dims = f2_dim
+        self.fc2 = nn.Linear(f1_dim, embed_dim, bias=False)
+        self.embed_dim = embed_dim
         # self.apply(weights_init)
 
     def forward(self, inp):
@@ -151,21 +152,21 @@ class NonLinearLatentFunction(nn.Module):
 
 
 # class FieldLatentFunction(nn.Module):
-#     def __init__(self, rr_dim, v_dim):
+#     def __init__(self, spatial_dim, gene_dim):
 #         super(FieldLatentFunction, self).__init__()
-#         self.rr_dim = rr_dim
-#         self.v_dim = v_dim
+#         self.spatial_dim = spatial_dim
+#         self.gene_dim = gene_dim
 #         f1_dim = 3
 #         f2_dim = 3
 #         # NOTE: it may not be a good idea to perform transformation of rr dimensions
-#         self.rr_fc = nn.Linear(self.rr_dim, f1_dim)
-#         self.v_fc = nn.Linear(self.v_dim, f1_dim)
+#         self.rr_fc = nn.Linear(self.spatial_dim, f1_dim)
+#         self.v_fc = nn.Linear(self.gene_dim, f1_dim)
 #         self.fc = nn.Linear(2*f1_dim, f2_dim)
 #         # self.apply(weights_init)
 #
 #     def forward(self, inp):
 #         # TODO: perhaps too many parameters (might overfit)
-#         inp1, inp2 = torch.split(inp, [self.rr_dim, self.v_dim], dim=-1)
+#         inp1, inp2 = torch.split(inp, [self.spatial_dim, self.gene_dim], dim=-1)
 #         x1 = F.relu(self.rr_fc(inp1))
 #         x2 = F.relu(self.v_fc(inp2))
 #         x = torch.cat([x1, x2], dim=-1)
@@ -173,23 +174,24 @@ class NonLinearLatentFunction(nn.Module):
 #         return x
 
 
-class FieldLatentFunction(nn.Module):
-    def __init__(self, rr_dim, v_dim):
-        super(FieldLatentFunction, self).__init__()
-        self.rr_dim = rr_dim
-        self.v_dim = v_dim
-        self.fc = nn.Linear(self.v_dim, 1, bias=False)
-        self.out_dims = self.rr_dim + 1
-
-    def forward(self, inp):
-        inp1, inp2 = torch.split(inp, [self.rr_dim, self.v_dim], dim=-1)
-        x = self.fc(inp2)
-        x = torch.cat([inp1, x], dim=-1)
-        return x
+# class FieldLatentFunction(nn.Module):
+#     def __init__(self, spatial_dim, gene_dim, f1_dim):
+#         super(FieldLatentFunction, self).__init__()
+#         self.spatial_dim = spatial_dim
+#         self.gene_dim = gene_dim
+#         self.embed_dim = self.spatial_dim + 1
+#         self.fc1 = nn.Linear(self.gene_dim, f1_dim, bias=False)
+#         self.fc2 = nn.Linear(f1_dim, 1, bias=False)
+        
+#     def forward(self, inp):
+#         inp1, inp2 = torch.split(inp, [self.spatial_dim, self.gene_dim], dim=-1)
+#         x = self.fc(inp2)
+#         x = torch.cat([inp1, x], dim=-1)
+#         return x
 
 
 class GpytorchGPR(object):
-    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None):
+    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None, latent_params=None):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -201,6 +203,7 @@ class GpytorchGPR(object):
         self.lr = lr
         self.latent = latent
         self.kernel_params = kernel_params
+        self.latent_params = latent_params
         self.max_iter = max_iterations
         # args = {'lr': lr, 'max_iter': max_iterations}
         # print('GPR model arguments:')
@@ -214,7 +217,7 @@ class GpytorchGPR(object):
     def train_var(self):
         return self._train_var.cpu().numpy()
 
-    def reset(self, x, y, var, **kwargs):
+    def reset(self, x, y, var):
         self._train_x = to_torch(x)
         self._train_y = to_torch(y)
         self._train_y_mean = self._train_y.mean()
@@ -223,16 +226,16 @@ class GpytorchGPR(object):
             self._train_var = to_torch(var)
 
         self.likelihood = GaussianLikelihood()
-        self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, **kwargs)
+        self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
-        # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',patience=50,verbose=True)
+        self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',patience=50,verbose=True)
             
-    def fit(self, x, y, var=None, **kwargs):
+    def fit(self, x, y, var=None, disp=False):
         #  TODO: do we need non-zero var (probably yes for cholesky decomposition)
         if var is None:
             var = np.full(len(y), 1e-5)
-        self.reset(x, y, var, **kwargs)
+        self.reset(x, y, var)
         self.model.train()
         self.likelihood.train()
         
@@ -243,8 +246,9 @@ class GpytorchGPR(object):
             loss = -self.mll(output, self._norm_train_y)
             loss.backward()
             self.optimizer.step()
-            # self.lr_scheduler.step(loss)
-            # print(i, loss.item())
+            self.lr_scheduler.step(loss)
+            if disp:
+                print(i, loss.item())
             if i == 0:
                 initial_ll = -loss.item()
             elif i == self.max_iter - 1:

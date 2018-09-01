@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import ipdb
 from utils import manhattan_distance, BFSNode, is_valid_cell
 from copy import deepcopy
+from graph_utils import get_heading, opposite_headings
 
 
-# defines the occupancy map of the field
 class Map(object):
     def __init__(self,
                  num_gp_rows=15,
@@ -29,7 +29,7 @@ class Map(object):
         self.obstacle_cols = np.arange(0, self.shape[1], 2)
         
         # 1 if obstacle 0 otherwise
-        self.occupied = self._build_occupied()
+        self.occupied = self._build_occupancy_grid()
 
         # all poses (x,y) in the map
         x, y = np.meshgrid(np.arange(self._shape[1]), np.arange(self._shape[0]))
@@ -39,7 +39,7 @@ class Map(object):
     def shape(self):
         return self._shape
 
-    def _build_occupied(self):
+    def _build_occupancy_grid(self):
         # generates the occupancy grid
         grid = np.full(self._shape, False)
         nr, nc = self._shape
@@ -54,6 +54,7 @@ class Map(object):
         return total_rows, total_cols
 
     def _get_row_pass_indices(self):
+        # return indices of all the row pass
         ind = []
         t = 0
         last = 0
@@ -62,17 +63,8 @@ class Map(object):
             t += 1
             last = last + self.row_pass_width + self.stack_len
         return np.array(ind)
-        # this was nice but deprecated now
-        # c = 0
-        # while t < self.num_gp_rows:
-        #     if t != 0 and t % self.stack_len == 0:
-        #         for j in range(self.row_pass_width):
-        #             ind.append(t+j+c)
-        #         c += self.row_pass_width
-        #
-        #     t += 1
-        # return np.array(ind[:self.row_pass_width * self.num_row_passes])
 
+    # TODO: make this the defacto rendering method and remove others
     def render(self, gp_pose=None, fig_idx=None, paths=None, locs=None):
         fig_idx = 0 if fig_idx is None else fig_idx
         plt.figure(fig_idx)
@@ -92,6 +84,7 @@ class Map(object):
         plt.show()
 
     def gp_pose_to_map_pose(self, gp_pose):
+        # convert gp_pose to map_pose 
         if isinstance(gp_pose, tuple):
             poses = np.array(gp_pose)
         else:
@@ -109,6 +102,7 @@ class Map(object):
             return map_poses
 
     def map_pose_to_gp_pose(self, map_pose):
+        # convert map pose to gp pose 
         assert isinstance(map_pose, tuple), 'Map pose must be a tuple!'
         if map_pose[1] % 2 == 1:
             return None
@@ -119,13 +113,88 @@ class Map(object):
         x = map_pose[0] - np.sum(self.row_pass_indices < map_pose[0])
         return x, y
 
+    # TODO: remove if not needed anymore
     @staticmethod
     def get_distances(pose, map_poses):
-        pose_ = np.array(pose).reshape(-1, 2)
-        map_poses_ = np.array(map_poses).reshape(-1, 2)
-        return np.abs(pose_ - map_poses_).sum(axis=-1)
+        raise NotImplementedError('This is wrong')
+        # distance between two nodes won't be simply manhattan distance
+        # pose_ = np.array(pose).reshape(-1, 2)
+        # map_poses_ = np.array(map_poses).reshape(-1, 2)
+        # return np.abs(pose_ - map_poses_).sum(axis=-1)
 
+    def distance_between_nodes(self, start, goal, heading):
+        # return distance between start and goal and final heading on goal
 
+        # if start and goal are in the same column
+        if start[1] == goal[1]:
+            h = get_heading(goal, start)
+            opposite = opposite_headings(heading, h)
+            # if headings align, then just move to the goal
+            if not opposite:
+                return manhattan_distance(start, goal), heading
+            # if not, move to the junction, then move to the adjacent column (and come back later) and proceed to the goal
+            else:
+                node = self.get_junction(start, heading)    
+                total_dist = manhattan_distance(start, node) + 2*2 + manhattan_distance(node, goal)
+                return total_dist, (-heading[0], 0)
+
+        # start and goal are in different columns
+        # move to the junction and then proceed to the goal
+        else:
+            node = self.get_junction(start, heading)
+            total_dist = manhattan_distance(start, node) + manhattan_distance(node, goal)
+            # shift to the column which has the goal and compute new heading
+            final_heading = get_heading(goal, (node[0], goal[1]))
+            final_heading = heading if final_heading is None else final_heading
+            return total_dist, final_heading
+
+    def get_junction(self, pose, heading):
+        # return junction in the heading direction
+        if heading == (1,0):
+            return self.get_down_junction(pose)
+        elif heading == (-1,0):
+            return self.get_up_junction(pose)
+        else:
+            raise NotImplementedError
+
+    def get_up_junction(self, pose):
+        # return up junction (in decreasing x direction)
+        up = max([x for x in self.row_pass_indices if x<=pose[0]])
+        return (up, pose[1])
+
+    def get_down_junction(self, pose):
+        # return down junction (in increasing x direction)
+        down = min([x for x in self.row_pass_indices if x>=pose[0]])
+        return (down, pose[1])
+
+    def nearest_waypoint_path_cost(self, start, start_heading, waypoints):
+        # return cost of the path formed by always moving to the nearest waypoint
+        # NOTE: this serves as an upper bound on the path cost
+        nw = len(waypoints)
+        visited = [False]*nw
+        total_cost = 0
+
+        node = start
+        heading = start_heading
+        while sum(visited) != nw:
+            # find the nearest waypoint from the current node
+            all_dists = [np.inf]*nw
+            all_final_headings = [(0,0)]*nw
+            for i in range(nw):
+                if visited[i]:
+                    continue
+                dist, final_heading = self.distance_between_nodes(node, waypoints[i], heading)
+                all_dists[i] = dist
+                all_final_headings[i] = final_heading
+
+            idx = np.argmin(all_dists)
+            total_cost += all_dists[idx]
+            node = waypoints[idx]
+            heading = all_final_headings[idx]
+            visited[idx] = True
+        return total_cost
+
+    # TODO: remove if not required
     def all_paths(self, start, waypoints, delta_input=None, max_length=None):
         # waypoints - list of tuples
         start = tuple(start)
@@ -227,7 +296,6 @@ class Map(object):
                         open_nodes.append(new_node)
 
         paths = [np.stack(node.path) for node in closed_nodes]
-        # ipdb.set_trace()
         # there should not be any duplicates
         # if duplicate_paths(paths):
         #     ipdb.set_trace()
@@ -244,7 +312,7 @@ class Map(object):
             visited[tuple(node)] = True
         print(len(path), visited.sum())
 
-
+    # TODO: remove if not required
     def min_dist_to_goal(self, pose, goal, delta=None):
         if delta is None:
             return manhattan_distance(pose, goal)
@@ -270,13 +338,6 @@ class Map(object):
 
         # else:
         #     raise NotImplementedError
-
-
-# def minimum_distance_to_go(start, waypoints, delta=1):
-#     if len(waypoints) == 1:
-#         return self.min_dist_to_goal(start, waypoints[0], delta)
-#     # waypoints - remaining waypoints to visit
-#     return greedy_minimum_total_distance([start] + waypoints)
 
 
 def has_waypoints(path, waypoints):
@@ -305,24 +366,13 @@ if __name__ == '__main__':
                     num_row_passes=2,
                     row_pass_width=1)
 
-    # waypoints = [(7,6), (15,16), (11,10), (5,10)]
-    waypoints = [(16,28)]
+    waypoints = [(7,6), (15,16), (11,10), (5,10)]
     for w in waypoints:
-        print(small_map.map_pose_to_gp_pose(w), small_map.occupied[w])
-    ipdb.set_trace() 
-    # waypoints = [(10,10)]
-    paths = small_map.all_paths((0,0), waypoints)
-    small_map.render(paths=paths)
-    # large_map = Map(num_gp_rows=84,
-    #                 num_gp_cols=84,
-    #                 num_row_passes=5,
-    #                 row_pass_width=2)
-
-    # small_map.render()
-    # for pose in small_map.all_poses:
-    #     gp_pose = small_map.map_pose_to_gp_pose(tuple(pose))
-    #     print(pose, gp_pose)
-
+        print(w, small_map.map_pose_to_gp_pose(w), small_map.occupied[w])
     
+    start = (0,0)
+    heading = (1,0)
+    path_length = small_map.nearest_waypoint_path_cost(start, heading, waypoints)
+    ipdb.set_trace()
 
 
