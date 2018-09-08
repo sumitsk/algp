@@ -1,5 +1,5 @@
 import numpy as np 
-from utils import generate_gaussian_data, manhattan_distance, valid_neighbors, entropy_from_cov
+from utils import generate_gaussian_data, manhattan_distance, valid_neighbors, entropy_from_cov, compute_rmse
 import ipdb
 from models import GpytorchGPR
 from networkx import nx
@@ -94,6 +94,22 @@ def find_best_path_mi(all_paths, sz, cov_matrix, ind):
     return best
 
 
+def find_best_path_arv(all_paths, sz, cov_matrix, ind):
+    all_uts = []
+    for i in range(len(all_paths)):
+        x = list(set(all_paths[i]))
+        poses = np.vstack(x)        
+        a = ind[poses[:,0], poses[:,1]]
+        cov = cov_matrix[a].T[a].T
+        cov_inv = np.linalg.inv(cov)
+        cov_xa = cov_matrix[:,a]
+        mat = np.dot(cov_xa, np.dot(cov_inv, cov_xa.T))
+        ut = np.trace(mat)/(sz**2)
+        all_uts.append(ut)
+    best = np.argmax(all_uts)
+    return best
+
+
 def draw_grid(ax, sz):
     radius = .1
     linewidth = 1.5
@@ -149,6 +165,21 @@ def plot(sz, start, goal, paths):
         draw_path(iax, path)
     plt.show()
 
+
+def predict(sz, cov_matrix, path, ind, y_all):
+    a = list(set([ind[p] for p in path]))
+    x = np.arange(sz**2)
+    cov_aa = cov_matrix[a].T[a].T
+    cov_xa = cov_matrix[x].T[a].T
+    cov_xx = cov_matrix[x].T[x].T
+    cov_aa_inv = np.linalg.inv(cov_aa)
+
+    mu = np.dot(cov_xa, np.dot(cov_aa_inv, y_all[a]))
+    rmse = compute_rmse(mu, y)
+    return rmse
+
+
+
 # show that using entropy as information gain criterion, informative planning is not suitable
 sz = 4
 x,y = generate_gaussian_data(sz, sz, k=2, min_var=.5, max_var=10)
@@ -156,9 +187,9 @@ gp = GpytorchGPR(lr=.1, max_iterations=200)
 
 # learn gp hyperparameters
 n = len(x)
-num_train = int(.5*n)
-ind = np.random.permutation(n)[:num_train]
-gp.fit(x,y)
+num_train = int(n)
+train_ind = np.random.permutation(n)[:num_train]
+gp.fit(x[train_ind],y[train_ind])
 
 start = (0,0)
 goal = (sz-1,sz-1)
@@ -175,8 +206,15 @@ ind = np.arange(sz**2).reshape(sz,sz)
 best_idx = find_best_path(all_paths, sz, cov_matrix, ind)
 best_mod_idx = find_best_path(all_paths, sz, cov_matrix, ind, entropy_constant)
 best_mi_idx = find_best_path_mi(all_paths, sz, cov_matrix, ind)
-
+# best_arv_idx = find_best_path_arv(all_paths, sz, cov_matrix, ind)
 paths = [all_paths[best_idx], all_paths[best_mi_idx], all_paths[best_mod_idx]]
 plot(sz, start, goal, paths)
 
-ipdb.set_trace()
+rmse = predict(sz, cov_matrix, all_paths[best_idx], ind, y)
+rmse_mod = predict(sz, cov_matrix, all_paths[best_mod_idx], ind, y)
+rmse_mi = predict(sz, cov_matrix, all_paths[best_mi_idx], ind, y)
+# rmse_arv = predict(sz, cov_matrix, all_paths[best_arv_idx], ind, y)
+
+print('RMSE entropy: ', rmse)
+print('RMSE mutual information: ', rmse_mi)
+print('RMSE modified entropy (ours): ', rmse_mod)
