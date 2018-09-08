@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import torch
 import pickle 
+import pandas as pd
 
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
@@ -53,7 +54,22 @@ def load_data(filename):
     num_cols = data_dict['num_cols']
     X = data_dict['X']
     Y = data_dict['Y'].squeeze()
-    return num_rows, num_cols, X, Y
+    valid = data_dict['valid'].squeeze()
+    return num_rows, num_cols, X[valid], Y[valid]
+
+
+def load_dataframe(filename, target_feature, extra_input_features=[]):
+    df = pd.read_pickle(filename)
+    num_rows = 15
+    num_cols = 37
+    X = np.vstack(df[['X']].values.squeeze())
+    row_range = X[:, :2]
+    gene = X[:, 2:]
+    ph_vals = np.hstack([df[[f]].values for f in extra_input_features])
+    final_x = np.concatenate([row_range, ph_vals, gene], axis=1)
+    y = df[[target_feature]].values.squeeze()
+    genotype = df[['category']].values.squeeze()
+    return num_rows, num_cols, final_x, y, genotype
 
 
 def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum'):
@@ -271,3 +287,22 @@ def fit_and_eval(gp, train_x, train_y, test_x, test_y, disp=False):
     train_rmse = compute_rmse(train_y, pred_train)
     test_rmse = compute_rmse(test_y, pred_test)
     return train_rmse, test_rmse
+
+
+def valid_neighbors(pose, grid_shape, dxdy=None):
+    if dxdy is None:
+        dxdy=[(0,1), (0,-1), (1,0), (-1,0)]
+    nodes = []
+    for dx,dy in dxdy:
+        new_node = (pose[0] + dx, pose[1] + dy) 
+        if is_valid_cell(new_node, grid_shape):
+            nodes.append(new_node)
+    return nodes
+
+
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1 or classname.find('Linear') != -1:
+        torch.nn.init.orthogonal_(m.weight.data)
+        if m.bias is not None:
+            m.bias.data.fill_(0)

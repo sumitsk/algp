@@ -1,44 +1,32 @@
 import ipdb
 import numpy as np
-from copy import deepcopy
-import matplotlib.pyplot as plt
-import seaborn as sns
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from utils import entropy_from_cov, is_valid_cell, Node
+from utils import entropy_from_cov, compute_rmse
 from graph_utils import get_heading
 from models import SklearnGPR, GpytorchGPR
 import time
-import warnings
 
 
 class Agent(object):
     def __init__(self, env, args):
         super()
         self.env = env
-        self.gp = None
         self._init_models(args)
 
-        self._camera_noise = args.camera_noise
-        self._sensor_noise = args.sensor_noise
-        self.utility_type = args.utility 
-        self._strategy = args.strategy 
-        # precision - reciprocal of variance
-        self._precision_method = args.precision_method 
+        self.camera_noise = args.camera_noise
+        self.sensor_noise = args.sensor_noise
+        self.update_every = args.update_every
+        self.num_samples_per_batch = args.num_samples_per_batch
+        self.beta = args.budget_factor
 
         self.reset()
-        self._pre_train(num_samples=args.num_pretrain_samples, only_sensor=True)
-        self.agent_map_pose = (0, 0)
-        self.agent_heading = (1, 0)
-        self.search_radius = args.search_radius
-        self.search_radius_delta = args.search_radius_delta
-        self.mi_radius = args.mi_radius
-
-        self.path = np.copy(self.agent_map_pose).reshape(-1, 2)
+        num_pretrain = int(args.fraction_pretrain * self.env.num_samples)
+        self._pre_train(num_samples=num_pretrain)
+        self.pose = (0, 0)
+        self.heading = (1, 0)
+        self.path = np.copy(self.pose).reshape(-1, 2)
         self.sensor_seq = np.empty((0, 2))
-        self.stops = np.empty((0, 2))
-        self.update_every = args.update_every
-
+        
     def _init_models(self, args):
         if args.model_type == 'sklearn_GP':
             self.gp = SklearnGPR()
@@ -55,449 +43,228 @@ class Agent(object):
         return kernel_params
 
     def reset(self):
-        self._visited = np.full(self.env.num_samples, False)
-        self.obs_y = np.zeros(self.env.num_samples)
-        self.obs_precision = np.zeros(self.env.num_samples)
+        self.sensor_data = [[] for _ in range(self.env.num_samples)]
+        self.camera_data = [[] for _ in range(self.env.num_samples)]
 
-    def _pre_train(self, num_samples, only_sensor=False):
+    def _pre_train(self, num_samples):
         print('====================================================')
         print('--- Pretraining ---')
         ind = np.random.permutation(self.env.num_samples)[:num_samples]
-        if only_sensor:
-            self._add_samples(ind, self._sensor_noise)
-        else:
-            self._add_samples(ind[:num_samples//2], self._camera_noise)
-            self._add_samples(ind[num_samples//2:], self._sensor_noise)
+        self._add_samples(ind, source='sensor')
         self.update_model()
         # if don't want to remember/condition on pre_train data points    
-        # self.reset()    
+        self.reset()    
         
-    def _add_samples(self, indices, noise):
+    def _add_samples(self, indices, source='sensor'):
+        noise = self.sensor_noise if source == 'sensor' else self.camera_noise
         y = self.env.collect_samples(indices, noise)
-        y_noise = np.full(len(indices), noise)
-        self._handle_data(indices, y, y_noise)
-        self._visited[indices] = True
-
-    def _update_precision(self, old_precision, new_precision):
-        if self._precision_method == 'sum':
-            return old_precision + new_precision
-        elif self._precision_method == 'max':
-            return np.maximum(old_precision, new_precision)
-        else:
-            raise NotImplementedError
-
-    def _handle_data(self, indices, y, var):
-        precision = 1.0/np.array(var)
-        old_obs = self.obs_y[indices]
-        old_precision = self.obs_precision[indices]
-
-        # weighted sum of old and new obs (y), weights are precision 
-        new_obs = (old_obs * old_precision + y * precision)/(old_precision + precision)
-        new_precision = self._update_precision(precision, old_precision)
-        self.obs_y[indices] = new_obs
-        self.obs_precision[indices] = new_precision
+        for i in range(len(indices)):
+            idx = indices[i]
+            if source == 'sensor':
+                self.sensor_data[idx].append(y[i])
+            else:
+                self.camera_data[idx].append(y[i])
 
     def update_model(self):
-        x = self.env.X[self._visited]
-        var = 1.0/(self.obs_precision[self._visited])
-        y = self.obs_y[self._visited]
-
-        print('\n--- Updating GP model ---')
-        start = time.time()
+        indices, y, var = self.get_sampled_dataset()        
+        x = self.env.X[indices]
         self.gp.fit(x, y, var)
-        end = time.time()
         self._post_update()
-        print('Time consumed: {}'.format(end - start))
+    
+    def get_sampled_dataset(self):
+        all_y = []
+        all_var = []
+        indices = []
+        for i in range(self.env.num_samples):
+            if len(self.camera_data[i])>0 and len(self.sensor_data[i])>0:
+                yc = np.mean(self.camera_data[i])
+                ys = np.mean(self.sensor_data[i])
+                yeq = (self.camera_noise * ys + self.sensor_noise * yc) / (self.camera_noise + self.sensor_noise)
+                var = self.sensor_noise
+
+            elif len(self.sensor_data[i])>0:
+                yeq = np.mean(self.sensor_data[i])
+                var = self.sensor_noise
+
+            elif len(self.camera_data[i])>0:
+                yeq = np.mean(self.camera_data[i])
+                var = self.camera_noise
+
+            else:
+                continue
+            all_y.append(yeq)
+            all_var.append(var)
+            indices.append(i)
+
+        return indices, np.array(all_y), np.array(all_var)
 
     def _post_update(self):
         alpha = 1e-5
         self.cov_matrix = self.gp.cov_mat(self.env.X) + alpha * np.eye(self.env.num_samples)
         eig_vals = np.linalg.eigvalsh(self.cov_matrix)
         min_eig = min(eig_vals)
-        max_eig = max(eig_vals)
         self.entropy_constant = -.5 * np.log(min_eig)
 
-    def run(self, render=False, num_runs=40):
-        if self._strategy == 'sensor_maximum_utility':
-            raise NotImplementedError
-        elif self._strategy == 'camera_maximum_utility':
-            raise NotImplementedError
-        elif self._strategy == 'informative':
-            # final_pred, final_var = self.run_informative(render, num_runs)
-            self.run2(num_runs=num_runs, render=render)
-        else:
-            raise NotImplementedError
-
-        # final training and test rmse and variance
-        # rmse_visited = np.linalg.norm(final_pred[self._visited] - self.env.Y[self._visited])/np.sqrt(self._visited.sum())
-        # rmse_unvisited = np.linalg.norm(final_pred[~self._visited] - self.env.Y[~self._visited])/np.sqrt((~self._visited).sum())
-        
-        # print('==========================================================')
-        # print('--- Final statistics --- ')
-        # print('RMSE visited: {:.3f} unvisited: {:.3f}'.format(rmse_visited, rmse_unvisited))
-        # print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(final_var.max(), final_var.min(), final_var.mean()))
-
-        # TODO: log relevant things
-        # path, camera samples, sensor samples
-        # self.path, self.sensor_seq, self.stops
-        # save these statistics and path and sensing locations to compare results later on
-
-    # TODO: put render in map.py file
-    def _render_path(self, ax):
-        # ax.set_cmap('hot')
-        plot = 1.0 - np.repeat(self.env.map.occupied[:, :, np.newaxis], 3, axis=2)
-        # highlight camera measurement
-        if self.path.shape[0] > 0:
-            plot[self.path[:, 0], self.path[:, 1], :] = [.75, .75, .5]
-        # highlight sensor measurement
-        if self.sensor_seq.shape[0] > 0:
-            plot[self.sensor_seq[:, 0], self.sensor_seq[:, 1]] = [.05, 1, .05]
-
-        plot[self.agent_map_pose[0], self.agent_map_pose[1], :] = [0, 0, 1]
-        ax.set_title('Environment')
-        ax.imshow(plot)
-
-    def render(self, fig, ax, pred, var):
-        # TODO: improve render by drawing arrows and annotating
-        # render path
-        self._render_path(ax[0, 0])
-
-        # TODO: use seaborn for rendering
-        # render plots
-        axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
-        axt.set_title('Ground Truth / Actual values')
-        imt = axt.imshow(self.env.Y.reshape(self.env.shape),
-            cmap='ocean', vmin=self.env.Y.min(), vmax=self.env.Y.max())
-        div = make_axes_locatable(axt)
-        caxt = div.new_horizontal(size='5%', pad=.05)
-        fig.add_axes(caxt)
-        fig.colorbar(imt, caxt, orientation='vertical')
-
-        axp.set_title('Predicted values')
-        imp = axp.imshow(pred.reshape(self.env.shape),
-            cmap='ocean', vmin=self.env.Y.min(), vmax=self.env.Y.max())
-        divm = make_axes_locatable(axp)
-        caxp = divm.new_horizontal(size='5%', pad=.05)
-        fig.add_axes(caxp)
-        fig.colorbar(imp, caxp, orientation='vertical')
-
-        axv.set_title('Variance')
-        imv = axv.imshow(var.reshape(self.env.shape), cmap='hot')
-        # divv = make_axes_locatable(axv)
-        # caxv = divv.new_horizontal(size='5%', pad=.05)
-        # fig.add_axes(caxv)
-        # fig.colorbar(imv, caxv, orientation='vertical')
-
-    def predict(self):
-        pred, std = self.gp.predict(self.env.X, return_std=True)
-        return pred, std**2
-
-    def run_informative(self, render, num_runs):
-        if render:
-            plt.ion()
-            fig, ax = plt.subplots(2, 2, figsize=(12, 8))
-
+    def run_ipp(self, render=False, num_runs=40):
+        # this function selects k points greedily and then finds a path that maximises the total information gain 
         for i in range(num_runs):
-            print('\n=============================================================')
+            # greedily select samples to be collected by sensors
+            new_gp_indices, utilities = self.greedy(self.num_samples_per_batch)            
+            waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
+
+            print('\n==================================================================================================')
             print('Run {}/{}'.format(i+1, num_runs))
+            print('------ Finding valid paths ---------\n')
+            print('Pose: ',self.pose, 'Heading: ', self.heading, 'Waypoints: ', waypoints)
             start = time.time()
-            # find next node to visit (node contains the next path segment)
-            next_node = self._bfs_search(self.agent_map_pose, self.search_radius + int(i * self.search_radius_delta))
-            
-            # add samples (camera and sensor)
-            self._add_samples(next_node.parents_index, self._camera_noise)
-            gp_index = self.env.map_pose_to_gp_index(next_node.map_pose)
-            if gp_index is not None:
-                self._add_samples([gp_index], self._sensor_noise)
-
-            # update GP model
-            if i % self.update_every == 0:
-                self.update_model()
-
-            # update agent statistics
-            self.path = np.concatenate([self.path, next_node.path], axis=0).astype(int)
-            self.agent_map_pose = next_node.map_pose
-            if gp_index is not None:
-                self.sensor_seq = np.concatenate([self.sensor_seq, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
-            self.stops = np.concatenate([self.stops, np.array(self.agent_map_pose).reshape(-1, 2)]).astype(int)
-    
-            print('\n--- Prediction --- ')
-            pred, var = self.predict()
-            # TODO: max variance is often times quite low (check this)
-            # TODO: implement a suitable terminating condition
-            # if np.max(var) < .01:
-            #     print('Converged')
-            #     break
-            print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-
-            if render:
-                self.render(fig, ax, pred, var)
-                plt.pause(.1)
+            paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, self.beta)
             end = time.time()
-            print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, end - start))
+            print('Number of feasible paths: ', len(paths_indices))
+            print('Time consumed {:4f}'.format(end - start))
 
-        return pred, var
-        
-    def _bfs_search(self, map_pose, max_distance):
-        print('Finding all possible paths')
-        start = time.time()
-        node = Node(map_pose, 0, 0, [])
-        open_nodes = [node]
-        closed_nodes = []
-
-        sz = self.env.map.occupied.shape
-        gvals = np.ones(sz) * float('inf')
-        gvals[map_pose] = 0
-        cost = 1
-        dx_dy = [(-1, 0), (1, 0), (0, 1), (0, -1)]
-        
-        # NOTE: right now there is only path for every cell (which may not be a big issue because of the grid layout of the field)
-        # entropy/mi are not monotonic so you can't use a branch and bound method to terminate the search (verify this) 
-        # TODO: if this is computationally expensive, then speed it up by using tree structure. 
-        # the most expensive part is training GP model
-        while len(open_nodes) != 0:
-            node = open_nodes.pop(0)
-            gp_index = self.env.map_pose_to_gp_index(node.map_pose)
-            closed_nodes.append(deepcopy(node))
-            map_pose = node.map_pose
-            if node.gval >= max_distance:
-                break
-
-            for dx, dy in dx_dy:
-                new_map_pose = (map_pose[0] + dx, map_pose[1] + dy)
-                new_gval = node.gval + cost
-                if is_valid_cell(new_map_pose, sz) and self.env.map.occupied[new_map_pose] != 1 and new_gval < gvals[new_map_pose]:
-                    gvals[new_map_pose] = new_gval
-
-                    # do not expand nodes in the opposite direction
-                    if len(self.path) > 2 and node.map_pose == self.agent_map_pose and new_map_pose == tuple(self.path[-2]):
-                        continue
-
-                    if gp_index is None:
-                        new_parents_index = node.parents_index
-                    else:
-                        new_parents_index = node.parents_index + [gp_index]
-
-                    new_path = np.concatenate([node.path, np.array(new_map_pose).reshape(-1, 2)])
-                    new_node = Node(new_map_pose, new_gval, node.utility, new_parents_index, new_path)
-                    open_nodes.append(new_node)
-
-        # NOTE: computational bottleneck (the most expensive part is GP training (reduce number of iterations there))
-        all_nodes_indices = []
-        all_nodes_x_noise = []
-        for node in closed_nodes:
-            gp_index = self.env.map_pose_to_gp_index(node.map_pose)
-            if gp_index is not None:
-                indices = node.parents_index + [gp_index]
-                x_noise = [self._camera_noise] * len(node.parents_index) + [self._sensor_noise]
-            else:
-                indices = node.parents_index
-                x_noise = [self._camera_noise] * len(node.parents_index)
-            
-            all_nodes_indices.append(indices)
-            all_nodes_x_noise.append(x_noise)
-        end = time.time()
-        print('Time consumed: {:.4f}'.format(end - start))
-
-        print('Finding best path')
-        start = time.time()
-        # v_ind - all gp indices in the mi_radius neighborhood
-        if self.mi_radius > np.prod(self.env.map.shape):
-            v_ind = list(range(self.env.num_samples))
-        else:
-            v_ind = self.env.get_neighborhood(self.agent_map_pose, self.mi_radius)[1]
- 
-        # samples outside mi_radius region (will be ignored for computing MI)
-        rest = list(set(np.arange(self.env.num_samples)) - set(v_ind))
-
-        v = self.env.X[v_ind, :]
-        cov_v = self.gp.cov_mat(v, v, white_noise=None)
-        info = []
-
-        # a - all samples taken so far (with their data dependent noise)
-        # a* = argmax MI(a, a_bar) where a_bar = v \ a
-        # compute MI(a, a_bar) = H(a) + H(a_bar) - H(a, a_bar) for all a
-        for indices, noise in zip(all_nodes_indices, all_nodes_x_noise):
-            if len(indices) == 0:
-                info.append(-np.inf)
-                continue
-
-            precision = np.copy(self.obs_precision)
-            # update samples' precision (reciprocal of variance) in the current path (a)
-            precision[indices] = self._update_precision(precision[indices], 1.0 / np.array(noise))
-            precision_v = precision[v_ind]
-
-            vis = np.copy(self._visited)
-            vis[indices] = True
-            vis[rest] = False
-
-            cov_a = cov_v[vis[v_ind]].T[vis[v_ind]].T
-            a_noise = 1.0/precision_v[vis[v_ind]]
-        
-            # entropy of new A
-            e1 = entropy_from_cov(cov_a + np.diag(a_noise))
-            if self.utility_type == 'entropy':
-                info.append(e1)
-            else:
-                vis[rest] = True
-                unvis = ~vis
-                # precision_v[unvis[v_ind]] = self._camera_noise
-                precision_v[unvis[v_ind]] = np.inf
-                cov_a_bar = cov_v[unvis[v_ind]].T[unvis[v_ind]].T
-                a_bar_noise = 1.0/precision_v[unvis[v_ind]]
-
-                # entropy of new A_bar (V - A)
-                e2 = entropy_from_cov(cov_a_bar + np.diag(a_bar_noise))
-                v_noise = 1.0/precision_v
-                e3 = entropy_from_cov(cov_v + np.diag(v_noise))
-
-                info.append(e1 + e2 - e3)
-
-        best_node = closed_nodes[np.argmax(info).item()]
-        end = time.time()
-        print('Time consumed: {:.4f}'.format(end - start))
-        return best_node
-
-    # this function selects k points greedily and then finds a path that maximises the total information gain 
-    def run2(self, num_runs, num_sensor_samples=1, render=False):
-        if render:
-            plt.ion()
-            fig, ax = plt.subplots(2, 2, figsize=(12, 8))
-
-        allowance = 1
-        for i in range(num_runs):
-            # greedily select samples (all of which will be collected by sensor)
-            new_samples, utilities = self.greedy(num_sensor_samples)
-            # new_samples are gp indices here
-            
-            new_locs = self.env.gp_index_to_map_pose(new_samples)
-            new_locs = [tuple(x) for x in new_locs]
-            print('------ Finding paths ---------')
-            print('waypoints ', new_locs)
-            
+            print('\n------ Finding best path ----------')
             start = time.time()
-            new_locs = [(2,0), (2,4)]
-            paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.agent_map_pose, self.agent_heading, new_locs, allowance)
-            end = time.time()
-            print('\nTime consumed {}'.format(end - start))
-
-            all_utilities = []
-
-            print('------ Finding best path ----------')
-            start = time.time()
-            if len(paths_indices) == 1:
-                best_idx = 0
-            else:
-                for indices in paths_indices:
-                    sampled = np.copy(self._visited)
-                    precision = np.copy(self.obs_precision)
-                
-                    sampled[indices] = True
-                    precision[indices] = self._update_precision(precision[indices], 1.0/self._camera_noise)
-                    precision[new_samples] = 1.0/self._sensor_noise
-
-                    temp_cov = self.cov_matrix[indices].T[indices].T + np.diag(1.0/precision[indices])
-                    ut = entropy_from_cov(temp_cov)
-                    all_utilities.append(ut)        
-
-                best_idx = np.argmax(all_utilities)
-
+            best_idx = self.best_path(paths_indices, new_gp_indices)
             best_path_indices = paths_indices[best_idx]
             best_path = self.env.get_path_from_checkpoints(paths_checkpoints[best_idx])
             end = time.time()
-            print('\nTime consumed {}'.format(end - start))
-
+            print('Time consumed {:4f}'.format(end - start))
 
             # add samples (camera and sensor)
-            self._add_samples(best_path_indices, self._camera_noise)
-            self._add_samples(new_samples, self._sensor_noise)
+            self._add_samples(best_path_indices, source='camera')
+            self._add_samples(new_gp_indices, source='sensor')
 
             # update GP model
-            if i % self.update_every == 0:
-                self.update_model()
+            # if i % self.update_every == 0:
+            #     self.update_model()
 
             # update agent statistics
             self.path = np.concatenate([self.path, best_path[1:]], axis=0).astype(int)
-            self.agent_map_pose = tuple(self.path[-1])
-            self.agent_heading = get_heading(self.path[-1], self.path[-2])
-
-            self.sensor_seq = np.concatenate([self.sensor_seq, np.stack(new_locs)]).astype(int)
-            self.stops = np.concatenate([self.stops, np.stack(new_locs)]).astype(int)
+            self.pose = tuple(self.path[-1])
+            self.heading = get_heading(self.path[-1], self.path[-2])
+            self.sensor_seq = np.concatenate([self.sensor_seq, np.stack(waypoints)]).astype(int)
     
             print('\n--- Prediction --- ')
-            pred, var = self.predict()
-            # TODO: max variance is often times quite low (check this)
-            # TODO: implement a suitable terminating condition
-            # if np.max(var) < .01:
-            #     print('Converged')
-            #     break
+            pred, var = self.predict_test(self.env.test_X)
+            rmse = compute_rmse(pred, self.env.test_Y)
+
+            print('RMSE: ', rmse)
             print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
 
-            if render:
-                self.render(fig, ax, pred, var)
-                plt.pause(.1)
             end = time.time()
             print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, end - start))
 
-        return pred, var
-        
+        print('==========================================================')
+        print('--- Final statistics --- ')
+        print('RMSE: {:.4f}'.format(rmse))
+        print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
+
+        # TODO: log relevant things
+        # path, camera samples, sensor samples
+        # self.path, self.sensor_seq
+        # save these statistics and path and sensing locations to compare results later on
+
+    def predict_train(self, test_ind=None):
+        test_ind = np.arange(self.env.num_samples) if test_ind is None else test_ind
+        train_ind, train_y, train_var = self.get_sampled_dataset()
+
+        cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
+        cov_xx = self.cov_matrix[test_ind].T[test_ind].T
+        cov_xa = self.cov_matrix[test_ind].T[train_ind].T
+
+        mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
+        mu = np.dot(mat1, train_y.reshape(-1,1))
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, np.diag(cov)
+
+    def predict_test(self, x):
+        train_ind, train_y, train_var = self.get_sampled_dataset()
+        cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
+        cov_xx = self.gp.cov_mat(x)
+        cov_xa = self.gp.cov_mat(x, self.env.X[train_ind])
+
+        mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
+        mu = np.dot(mat1, train_y.reshape(-1,1))
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, np.diag(cov)
 
     def greedy(self, num_samples):
-        # greedily select samples 
-        # TODO: implement distance constraint if required (need to do an efficient lookup of distance between two nodes)
-        # if all three are provided, then distance constraint will be applied
-        # distance_constraint = pose is not None and locs is not None and max_distance is not None
-
-        # TODO: see if information gain criteria can also be modified to be monotonic
-
+        # select most informative samples in a greedy manner
         n = self.env.num_samples
-        sampled = np.copy(self._visited)
-        precision = np.copy(self.obs_precision)
-        cumm_utilities = []
-        new_samples = []
-        cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(1.0/precision[sampled])
+        camera_sampled = np.array([False if len(x)==0 else True for x in self.camera_data])
+        camera_var = np.full(n, np.inf)
+        camera_var[camera_sampled] = self.camera_noise
+        
+        sensor_sampled = np.array([False if len(x)==0 else True for x in self.sensor_data])
+        sensor_var = np.full(n, np.inf)
+        sensor_var[sensor_sampled] = self.sensor_noise
+        
+        sampled = sensor_sampled | camera_sampled
+        var = np.minimum(sensor_var[sampled], camera_var[sampled])
+        cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
         ent_v = entropy_from_cov(cov_v, self.entropy_constant)
 
+        cumm_utilities = []
+        new_samples = []
         for _ in range(num_samples):
             utilities = np.full(n, 0.0)
             cond = ent_v + sum(cumm_utilities)
 
             for i in range(n):
                 # if entropy is monotonic, then this step is not necessary (however better for efficiency)
-                # assuming, precision is updated in the "max" fashion, in the latter case, this will be always be false 
-                if sampled[i] and 1.0/precision[i]==self._sensor_noise:
+                if sensor_sampled[i]:
                     continue
-                
-                # if distance_constraint:
-                #     # TODO: bug: distance between two locations is not manhattan distance
-                #     if manhattan_distance(pose, locs[i]) > max_distance:
-                #         continue
 
-                # modify sampled and precision (temporarily)
-                org_sampled = sampled[i]
-                org_precision = precision[i]
-                sampled[i] = True
-                precision[i] = self._update_precision(org_precision, 1.0/self._sensor_noise)
+                # modify sampled (temporarily)
+                sensor_sampled[i] = True
+                sensor_var[i] = self.sensor_noise
+                sampled = sensor_sampled | camera_sampled
+                var = np.minimum(sensor_var[sampled], camera_var[sampled])
 
                 # a - set of all sampled locations 
-                cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(1.0/precision[sampled])
+                cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
                 ent_a = entropy_from_cov(cov_a, self.entropy_constant)
                 utilities[i] = ent_a - cond
 
-                # reset sampled and precision
-                sampled[i] = org_sampled
-                precision[i] = org_precision
+                # reset sampled
+                sensor_sampled[i] = False
+                sensor_var[i] = np.inf
 
             best_sample = np.argmax(utilities)
             cumm_utilities.append(utilities[best_sample])
             new_samples.append(best_sample)
 
-            # update sampled and precision of best sample location
-            sampled[best_sample] = True
-            precision[best_sample] = self._update_precision(precision[best_sample], 1.0/self._sensor_noise)
-
+            # update sampled
+            sensor_sampled[best_sample] = True
+            sensor_var[best_sample] = self.sensor_noise
+ 
             # if min(utilities) < 0:
-            #     warnings.warn('Utility is negative!!')
             #     ipdb.set_trace()
-
         return new_samples, cumm_utilities
+
+    def best_path(self, paths_indices, new_gp_indices):
+        if len(paths_indices) == 1:
+            return 0
+
+        indices, _, var = self.get_sampled_dataset()
+        all_ind = indices + new_gp_indices
+        all_var = np.concatenate([var, np.full(len(new_gp_indices), self.sensor_noise)])
+        
+        cov_aa = self.cov_matrix[all_ind].T[all_ind].T + np.diag(all_var)
+        l_inv = np.linalg.inv(np.linalg.cholesky(cov_aa))
+        cov_aa_inv = np.dot(l_inv.T, l_inv)
+
+        all_ind_set = set(all_ind)
+        all_h = []
+        for i in range(len(paths_indices)):
+            new_camera_ind = list(set(paths_indices[i]) - all_ind_set)
+            cov_xx = self.cov_matrix[new_camera_ind].T[new_camera_ind].T
+            cov_xa = self.cov_matrix[new_camera_ind].T[all_ind].T
+
+            cov = cov_xx - np.dot(cov_xa, np.dot(cov_aa_inv, cov_xa.T))
+            h = entropy_from_cov(cov)
+            all_h.append(h)
+        idx = np.argmax(all_h)
+        return idx
+
+        

@@ -24,38 +24,37 @@ if __name__ == '__main__':
     with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
         json.dump(vars(args), f, indent=True)
 
-    env = FieldEnv(data_file=args.data_file)
-    # single agent (data dependent noise model)
+    env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype)
     agent = Agent(env, args)
-    agent.run(args.render, args.num_runs)
+    agent.run_ipp(render=args.render, num_runs=args.num_runs)
 
-    keys = [i for i in args_dict]
-    if not args.eval_only:
-        # make a new workbook if not exists
-        import datetime
-        now = datetime.datetime.now()
-        date = str(now.month)+'/'+str(now.day)
-        time = str(now.hour)+':'+str(now.minute)
-        args_dict['date'] = date
-        args_dict['time'] = time
-        try:
-            rb = open_workbook(args.logs_wb)
-        except Exception:
-            import xlsxwriter
-            wb = xlsxwriter.Workbook(args.logs_wb)
-            sh = wb.add_worksheet()
-            for i, val in enumerate(keys):
-                sh.write(0, i, val)
-            wb.close()
-            rb = open_workbook(args.logs_wb)
+    # keys = [i for i in args_dict]
+    # if not args.eval_only:
+    #     # make a new workbook if not exists
+    #     import datetime
+    #     now = datetime.datetime.now()
+    #     date = str(now.month)+'/'+str(now.day)
+    #     time = str(now.hour)+':'+str(now.minute)
+    #     args_dict['date'] = date
+    #     args_dict['time'] = time
+    #     try:
+    #         rb = open_workbook(args.logs_wb)
+    #     except Exception:
+    #         import xlsxwriter
+    #         wb = xlsxwriter.Workbook(args.logs_wb)
+    #         sh = wb.add_worksheet()
+    #         for i, val in enumerate(keys):
+    #             sh.write(0, i, val)
+    #         wb.close()
+    #         rb = open_workbook(args.logs_wb)
         
-        rsh = rb.sheets()[0]
-        row = rsh.nrows
-        wb = copy(rb)
-        wsh = wb.get_sheet(0)
-        for i in range(len(keys)):
-            k = rsh.cell(0, i).value
-            wsh.write(row, i, args_dict[k])    
+    #     rsh = rb.sheets()[0]
+    #     row = rsh.nrows
+    #     wb = copy(rb)
+    #     wsh = wb.get_sheet(0)
+    #     for i in range(len(keys)):
+    #         k = rsh.cell(0, i).value
+    #         wsh.write(row, i, args_dict[k])    
 
-        wb.save(args.logs_wb)    
+    #     wb.save(args.logs_wb)    
     

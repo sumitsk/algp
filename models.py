@@ -16,14 +16,8 @@ import warnings
 import ipdb
 from utils import to_torch, to_numpy
 from pprint import pprint
-
-
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1 or classname.find('Linear') != -1:
-        nn.init.orthogonal_(m.weight.data)
-        if m.bias is not None:
-            m.bias.data.fill_(0)
+import matplotlib.pyplot as plt
+from copy import deepcopy
 
 
 class SklearnGPR(object):
@@ -70,52 +64,6 @@ class SklearnGPR(object):
         return cov
 
     
-class ExactGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, latent_params=None):
-        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self._set_latent_function(latent, latent_params)
-        
-        self.mean_module = ZeroMean()
-        ard_num_dims = self.latent_func.embed_dim if self.latent_func.embed_dim is not None else train_x.size(-1)
-        
-        kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
-        if kernel is None or kernel == 'rbf':
-            self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
-        elif kernel == 'matern':
-            self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
-        elif kernel == 'spectral_mixture':
-            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'], n_dims=train_x.size(-1))
-            self.kernel_covar_module.initialize_from_data(train_x, train_y)
-        else:
-            raise NotImplementedError
-
-        # set covariance module
-        if var is not None:
-            self.noise_covar_module = WhiteNoiseKernel(var)
-            self.covar_module = self.kernel_covar_module + self.noise_covar_module
-        else:
-            self.covar_module = self.kernel_covar_module
-        
-    def _set_latent_function(self, latent, latent_params):
-        if latent is None or latent == 'identity':
-            self.latent_func = IdentityLatentFunction()
-        elif latent == 'linear':
-            self.latent_func = LinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'])
-        elif latent == 'non_linear':
-            self.latent_func = NonLinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'], latent_params['embed_dim'])
-        # NOTE: not using for now
-        # elif latent == 'field':
-        #     self.latent_func = FieldLatentFunction(latent_params['input_dim'], )
-        else:
-            raise NotImplementedError
-
-    def forward(self, inp):
-        x = self.latent_func(inp)
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return GaussianRandomVariable(mean_x, covar_x)
-
-
 class IdentityLatentFunction(nn.Module):
     def __init__(self):
         super(IdentityLatentFunction, self).__init__()
@@ -205,9 +153,6 @@ class GpytorchGPR(object):
         self.kernel_params = kernel_params
         self.latent_params = latent_params
         self.max_iter = max_iterations
-        # args = {'lr': lr, 'max_iter': max_iterations}
-        # print('GPR model arguments:')
-        # pprint(args)
 
     @property
     def train_x(self):
@@ -217,7 +162,7 @@ class GpytorchGPR(object):
     def train_var(self):
         return self._train_var.cpu().numpy()
 
-    def reset(self, x, y, var):
+    def reset(self, x, y, var, load_hyperparams=False):
         self._train_x = to_torch(x)
         self._train_y = to_torch(y)
         self._train_y_mean = self._train_y.mean()
@@ -229,10 +174,12 @@ class GpytorchGPR(object):
         self.model = ExactGPModel(self._train_x, self._norm_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
-        self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',patience=50,verbose=True)
-            
+        self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', patience=50, verbose=True)
+        if load_hyperparams:
+            ipdb.set_trace()
+
+
     def fit(self, x, y, var=None, disp=False):
-        #  TODO: do we need non-zero var (probably yes for cholesky decomposition)
         if var is None:
             var = np.full(len(y), 1e-5)
         self.reset(x, y, var)
@@ -240,6 +187,7 @@ class GpytorchGPR(object):
         self.likelihood.train()
         
         # NOTE: with zero mean and low range observation (0-1 types), loss stabilises
+        losses = []
         for i in range(self.max_iter):
             self.optimizer.zero_grad()
             output = self.model(self._train_x)
@@ -253,27 +201,29 @@ class GpytorchGPR(object):
                 initial_ll = -loss.item()
             elif i == self.max_iter - 1:
                 final_ll = -loss.item()
+            losses.append(loss.item())
 
-        print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
+        # print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
+        # print(self.optimizer.param_groups[0]['lr'])
+        # pr = [x for x in self.model.named_parameters()]
+        # print(dict(pr)['kernel_covar_module.log_lengthscale'])
+        # embed = self.get_embeddings(self._train_x)
         # precomputing quantities for predictions
-        K = self.cov_mat(self._train_x, white_noise=self._train_var)
+        K = self.cov_mat(self._train_x) + np.diag(self.train_var)
         self.L_ = cholesky(K, lower=True)
+        # K = self.L_ * self.L_.T
+        # self.hyperparams = deepcopy(dict(self.model.named_parameters()))
 
-    def cov_mat(self, x1, x2=None, white_noise=None):
+    def cov_mat(self, x1, x2=None):
         x1_ = to_torch(x1)
         x2_ = to_torch(x2)
-        white_noise = to_torch(white_noise)
-        flag = x2_ is None or torch.equal(x1_, x2_)
-
+        
         # NOTE: set model to eval mode
         self.model.eval()
         with torch.no_grad():
             x1_ = self.model.latent_func(x1_)
-            if flag:
+            if x2_ is None or torch.equal(x1_, x2_):
                 cov = self.model.covar_module(x1_).evaluate().cpu().numpy()
-                # add white noise only for symmetric case
-                if white_noise is not None:
-                    cov = cov + torch.diag(white_noise)
             else:
                 x2_ = self.model.latent_func(x2_)
                 cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
@@ -315,3 +265,52 @@ class GpytorchGPR(object):
             x_ = to_torch(x)
             embeds = self.model.latent_func(x_)
             return to_numpy(embeds)
+
+
+class ExactGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood, var=None, latent=None, kernel_params=None, latent_params=None):
+        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+        if latent_params is None:
+            latent_params = {'input_dim': train_x.size(-1)}
+        self._set_latent_function(latent, latent_params)
+        
+        self.mean_module = ZeroMean()
+        ard_num_dims = self.latent_func.embed_dim if self.latent_func.embed_dim is not None else train_x.size(-1)
+        
+        kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
+        if kernel is None or kernel == 'rbf':
+            self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
+        elif kernel == 'matern':
+            self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
+        elif kernel == 'spectral_mixture':
+            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'], n_dims=train_x.size(-1))
+            self.kernel_covar_module.initialize_from_data(train_x, train_y)
+        else:
+            raise NotImplementedError
+
+        # set covariance module
+        if var is not None:
+            self.noise_covar_module = WhiteNoiseKernel(var)
+            self.covar_module = self.kernel_covar_module + self.noise_covar_module
+        else:
+            self.covar_module = self.kernel_covar_module
+        
+    def _set_latent_function(self, latent, latent_params):
+        if latent is None or latent == 'identity':
+            self.latent_func = IdentityLatentFunction()
+        elif latent == 'linear':
+            if 'embed_dim' not in latent_params:
+                latent_params['embed_dim'] = 6
+            self.latent_func = LinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'])
+        elif latent == 'non_linear':
+            if 'embed_dim' not in latent_params:
+                latent_params['embed_dim'] = 6
+            self.latent_func = NonLinearLatentFunction(latent_params['input_dim'], latent_params['embed_dim'], latent_params['embed_dim'])
+        else:
+            raise NotImplementedError
+
+    def forward(self, inp):
+        x = self.latent_func(inp)
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return GaussianRandomVariable(mean_x, covar_x)

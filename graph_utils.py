@@ -60,20 +60,17 @@ def in_between(node, down_node, up_node):
     return False
     
 
-def lower_bound_path_cost(node, waypoints):
-    # minimum cost of traversal to all the unvisited waypoints
-    # pose = node[0]
+def lower_bound_path_cost(pose, waypoints):
+    # return minimum cost of traversal to all the unvisited waypoints
 
-    # remaining waypoints
-    left = [w for i,w in enumerate(waypoints) if not node[1][i]]
-    all_locs = np.vstack(left + [node[0]])
     # boundaries of the bounding box
+    all_locs = np.vstack(waypoints + [pose])
     # TODO: this can be further tightened :
     # 1. if only one waypoint left (find the exact distance to go)
     # 2. if there are waypoints in columns other than the robot's, then use nearest junction for bounding box computation
     mins = np.min(all_locs, axis=0)
     maxs = np.max(all_locs, axis=0)
-    t = np.array(node[0])
+    t = np.array(pose)
     a = t - mins
     b = maxs - t
     dist = sum(a) + sum(b) + min(a[0],b[0]) + min(a[1],b[1])
@@ -142,16 +139,11 @@ def path_cost(path):
     return cost
 
 
-def node_action(tree, node):
-    # determines what to do with the given node
-    # all nodes in the graph with same position and orientation
-    visiteds = [n[1] for n in tree.nodes() if n[0]==node[0] and n[2]==node[2]]
-    for v in visiteds:
-        diff = np.array(v)*1 - np.array(node[1])*1
-        # if same node exists, then merge this node
-        if (diff==0).all():
-            return 'merge'
-        # if better node exists then this node need not be added if max path length = shortest path length
-        if (diff>=0).all() and diff.max()==1:
-            return 'discard'
-    return 'keep'
+def find_merge_to_node(tree, node):
+    # all nodes in the graph with same attributes as node
+    all_nodes = [n for n in tree.nodes() if tree.node[n]==node]
+    if len(all_nodes) > 1:
+        ipdb.set_trace()
+    if len(all_nodes) > 0:
+        return all_nodes[0]
+    return None   
