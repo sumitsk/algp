@@ -91,7 +91,7 @@ class NonLinearLatentFunction(nn.Module):
 
 
 class GPR(object):
-    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None, latent_params=None, no_likelihood_noise=False):
+    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None, latent_params=None, learn_likelihood_noise=False):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -105,7 +105,7 @@ class GPR(object):
         self.kernel_params = kernel_params
         self.latent_params = latent_params
         self.max_iter = max_iterations
-        self.no_likelihood_noise = no_likelihood_noise
+        self.learn_likelihood_noise = learn_likelihood_noise
 
     @property
     def train_x(self):
@@ -117,7 +117,7 @@ class GPR(object):
 
     def reset(self, x, y, var):
         self.set_train_data(x, y, var)
-        self.likelihood = GaussianLikelihood(no_noise=self.no_likelihood_noise)
+        self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
         self.model = ExactGPModel(self._train_x, self._zero_mean_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)

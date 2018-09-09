@@ -2,10 +2,12 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import load_data, zero_mean_unit_variance, is_valid_cell, load_dataframe, normalize
+from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, normalize, draw_path
 from networkx import nx
 from copy import deepcopy
 from graph_utils import get_new_nodes_and_edges, edge_cost, get_heading, lower_bound_path_cost, find_merge_to_node
+import matplotlib.pyplot as plt
+
 
 class FieldEnv(object):
     def __init__(self, num_rows=15, num_cols=15, data_file=None, phenotype='plant_count', num_test=40):
@@ -18,7 +20,6 @@ class FieldEnv(object):
             # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
 
         else:
-            # self.num_rows, self.num_cols, self.X, self.Y = load_data(data_file)
             self.num_rows, self.num_cols, self.X, self.Y, self.category = load_dataframe(data_file, 
                                                                           target_feature=phenotype,
                                                                           extra_input_features=['grvi', 'leaf_fill'])
@@ -26,7 +27,7 @@ class FieldEnv(object):
 
             # take out a category-wise test set scattered uniformly across genotypes
             test_inds = []
-            for i in range(4):
+            for i in range(self.category.max()+1):
                 ind = np.random.choice(np.where(self.category==i)[0], num_test//4, replace=False)
                 test_inds.append(ind)
             test_inds = np.hstack(test_inds)
@@ -45,6 +46,10 @@ class FieldEnv(object):
 
         # self._normalize_dataset()
         self._setup_graph()
+
+        # for rendering
+        self.fig = None
+        self.ax = None
 
     def _place_samples(self):
         self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
@@ -133,7 +138,7 @@ class FieldEnv(object):
         # for efficieny, it will be beneficial if nodes are expanded in increasing order of gval
         idx = root
         count_merged = 0
-        count_skipped = 0
+        # count_skipped = 0
         while len(open_list) > 0:
             parent_idx = open_list.pop(0)
             tree_node = tree.node[parent_idx]
@@ -203,7 +208,7 @@ class FieldEnv(object):
             for i, path in enumerate(path_gen):
                 locs = [tree.node[p]['pose'] for p in path]
                 
-                # this step is computationally expensive (determining indices on a path)
+                # NOTE: this step is computationally expensive (determining indices on a path)
                 gp_indices = [self.gp_indices_between(locs[t],locs[t+1]) for t in range(len(path)-1)]
                 # need to add the last sampling location 
                 gp_indices = [item for sublist in gp_indices for item in sublist] + [self.map_pose_to_gp_index(locs[-1])]
@@ -290,13 +295,17 @@ class FieldEnv(object):
             for i in range(nw):
                 if parent_node['visited'][i]:
                     continue
+                # print(parent_node['pose'], waypoints[i], parent_node['heading'])    
                 cost, final_heading = self.map.distance_between_nodes(parent_node['pose'], waypoints[i], parent_node['heading'])
+                if final_heading is None:
+                    ipdb.set_trace()
                 new_gval = parent_node['gval'] + cost
                 if new_gval > least_cost:
                     continue
 
                 new_visited = np.copy(parent_node['visited'])
                 new_visited[i] = True
+                # print(waypoints[i], final_heading)
                 child_node = dict(pose=waypoints[i], heading=final_heading, visited=new_visited, gval=new_gval)
                 
                 idx += 1
@@ -334,6 +343,45 @@ class FieldEnv(object):
     def map_pose_to_gp_index(self, map_pose):
         assert isinstance(map_pose, tuple), 'Map pose must be a tuple'
         return self.map_pose_to_gp_index_matrix[map_pose]
+
+    def render(self, next_path_waypoints, all_paths, next_sensor_locations, all_sensor_locations):
+        if self.fig is None:
+            plt.ion()
+            self.fig, self.ax = plt.subplots(1,1)
+        else:
+            self.ax.cla()
+
+        self.ax.set_title('Environment')
+        plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
+        all_paths_color = [.75, .75, .5] 
+        all_sensor_locations_color = [.05, 1, .05]
+        # next_path_color = [.3, .3, .3]
+        next_sensor_locations_color = [.8, .1, .4]
+
+        # highlight all camera samples locations 
+        if len(all_paths) > 0:
+            plot[all_paths[:, 0], all_paths[:, 1], :] = all_paths_color
+        
+        # highlight all sensor samples locations
+        if len(all_sensor_locations) > 0:
+            plot[all_sensor_locations[:, 0], all_sensor_locations[:, 1], :] = all_sensor_locations_color
+
+        # highlight next camera samples
+        # if len(next_path) > 0:
+        #     plot[next_path[:, 0], next_path[:, 1], :] = next_path_color
+
+        # highlight next sensor samples
+        if len(next_sensor_locations) > 0:
+            plot[next_sensor_locations[:,0], next_sensor_locations[:,1], :] = next_sensor_locations_color
+
+        waypoints = [x[::-1] for x in next_path_waypoints]
+        draw_path(self.ax, waypoints)
+
+        pose = all_paths[-1]
+        plot[pose[0], pose[1], :] = [0, 0, 1]
+        self.ax.imshow(plot)
+
+        plt.pause(1)
 
 
 if __name__ == '__main__':

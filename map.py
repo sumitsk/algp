@@ -62,6 +62,14 @@ class Map(object):
         return np.array(ind)
    
     def distance_between_nodes(self, start, goal, heading):
+        # these cases should never occur
+        if start[0] not in self.row_pass_indices:
+            if heading not in [(1,0),(-1,0)]:
+                ipdb.set_trace()
+
+        if goal[0] in self.row_pass_indices:
+            ipdb.set_trace()
+
         # return distance between start and goal and final heading on goal
         # if start and goal are in the same column
         if start[1] == goal[1]:
@@ -69,7 +77,7 @@ class Map(object):
             opposite = opposite_headings(heading, h)
             # if headings align, then just move to the goal
             if not opposite:
-                return manhattan_distance(start, goal), heading
+                return manhattan_distance(start, goal), get_heading(goal, start)
             # if not, move to the junction, then move to the adjacent column (and come back later) and proceed to the goal
             else:
                 sj = self.get_junction(start, heading)    
@@ -173,11 +181,8 @@ class Map(object):
     #     ax.imshow(plot)
 
     # def render(self, fig, ax, pred, var):
-    #     # TODO: improve render by drawing arrows and annotating
-    #     # render path
-    #     self._render_path(ax[0, 0])
+    #     # self._render_path(ax[0, 0])
 
-    #     # TODO: use seaborn for rendering
     #     # render plots
     #     axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
     #     axt.set_title('Ground Truth / Actual values')

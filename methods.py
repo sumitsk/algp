@@ -17,8 +17,7 @@ def ground_truth(env, args, noise_std):
 	mu1 = gp1.predict(test_x)
 	rmse1 = compute_rmse(mu1, test_y)
 	
-	likelihood_var = gp1.likelihood.log_noise.exp().item()
-	mu1p = posterior_distribution(gp1, train_x, train_y, test_x, train_var, likelihood_var=likelihood_var)
+	mu1p = posterior_distribution(gp1, train_x, train_y, test_x, train_var)
 	rmse1p = compute_rmse(mu1p, test_y)
 
 	# train on a subset D
@@ -31,8 +30,7 @@ def ground_truth(env, args, noise_std):
 	mu2D = gp2.predict(test_x)
 	rmse2D = compute_rmse(mu2D, test_y)
 
-	likelihood_var = gp2.likelihood.log_noise.exp().item()
-	mu2Dp = posterior_distribution(gp2, train_x[train_ind], train_y[train_ind], test_x, train_var[train_ind], likelihood_var=likelihood_var)
+	mu2Dp = posterior_distribution(gp2, train_x[train_ind], train_y[train_ind], test_x, train_var[train_ind])
 	rmse2Dp = compute_rmse(mu2Dp, test_y)
 
 	# condition on X

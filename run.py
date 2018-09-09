@@ -6,10 +6,8 @@ import os
 import json
 import numpy as np 
 import torch
-from xlrd import open_workbook
-from xlutils.copy import copy
+import matplotlib.pyplot as plt
 import ipdb
-from methods import ground_truth
 
 
 if __name__ == '__main__':
@@ -26,10 +24,11 @@ if __name__ == '__main__':
         json.dump(vars(args), f, indent=True)
 
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype)
-    ground_truth(env, args, args.sensor_std)
+    # ground_truth(env, args, args.sensor_std)
 
     agent = Agent(env, args)
-    agent.run_ipp(render=args.render, num_runs=args.num_runs)
+    results = agent.run_ipp(render=args.render, num_runs=args.num_runs, criterion=args.criterion, camera_disabled=args.camera_disabled, adaptive=args.adaptive)
+    ipdb.set_trace()
 
     # keys = [i for i in args_dict]
     # if not args.eval_only:

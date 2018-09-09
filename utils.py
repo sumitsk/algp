@@ -290,7 +290,7 @@ def fit_and_eval(gp, train_x, train_y, test_x, test_y, disp=False):
     return train_rmse, test_rmse
 
 
-def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_var=None, return_std=False, return_cov=False):
+def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_var=None, return_var=False, return_cov=False):
     train_y_mean = np.mean(train_y)
 
     # robust to the behavior of white noise kernel
@@ -301,10 +301,10 @@ def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_va
     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
     mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean
     
-    if return_std:
+    if return_var:
         cov = cov_xx - np.dot(mat1, cov_xa.T)
-        return mu, np.sqrt(np.diag(cov))
-    
+        return mu, np.diag(cov)
+         
     if return_cov:
         cov = cov_xx - np.dot(mat1, cov_xa.T)
         return mu, cov
@@ -335,3 +335,28 @@ def get_monotonic_entropy_constant(cov_matrix):
     min_eig = min(eig_vals)
     entropy_constant = -.5 * np.log(min_eig)
     return entropy_constant
+
+
+def draw_path(ax, path, head_width=None, head_length=None, linewidth=None, delta=None, color=None):
+    head_width = .05 if head_width is None else head_width
+    head_length = .1 if head_length is None else head_length
+    linewidth = 2 if linewidth is None else linewidth
+    delta = head_length*2 if delta is None else delta
+    arrow_color = 'red' if color is None else color
+
+    for i in range(len(path)-1):
+        source = path[i]
+        sink = path[i+1]
+        dxdy = (sink[0]-source[0], sink[1]-source[1])
+        dx = dxdy[0]
+        dy = dxdy[1]
+        if dx == 0:
+            sign = dy//abs(dy)
+            dy = sign*(abs(dy)-delta)
+        else:
+            sign = dx//abs(dx)
+            dx = sign*(abs(dx)-delta)
+        
+        ax.arrow(source[0], source[1], dx, dy,
+                 head_width=head_width, head_length=head_length,
+                 linewidth=linewidth, color=arrow_color, alpha=1)
