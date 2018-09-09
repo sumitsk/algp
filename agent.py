@@ -1,9 +1,9 @@
 import ipdb
 import numpy as np
 
-from utils import entropy_from_cov, compute_rmse
+from utils import entropy_from_cov, compute_rmse, posterior_distribution
 from graph_utils import get_heading
-from models import SklearnGPR, GpytorchGPR
+from models import GPR
 import time
 
 
@@ -13,8 +13,8 @@ class Agent(object):
         self.env = env
         self._init_models(args)
 
-        self.camera_noise = args.camera_noise
-        self.sensor_noise = args.sensor_noise
+        self.camera_std = args.camera_std
+        self.sensor_std = args.sensor_std
         self.update_every = args.update_every
         self.num_samples_per_batch = args.num_samples_per_batch
         self.beta = args.budget_factor
@@ -28,14 +28,9 @@ class Agent(object):
         self.sensor_seq = np.empty((0, 2))
         
     def _init_models(self, args):
-        if args.model_type == 'sklearn_GP':
-            self.gp = SklearnGPR()
-        elif args.model_type == 'gpytorch_GP':
-            kernel_params = self._get_kernel_params(args)
-            self.gp = GpytorchGPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params)
-        else:
-            raise NotImplementedError
-
+        kernel_params = self._get_kernel_params(args)
+        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params, no_likelihood_noise=True)
+        
     def _get_kernel_params(self, args):
         kernel_params = {'type': args.kernel}
         if args.kernel == 'spectral_mixture':
@@ -56,8 +51,8 @@ class Agent(object):
         self.reset()    
         
     def _add_samples(self, indices, source='sensor'):
-        noise = self.sensor_noise if source == 'sensor' else self.camera_noise
-        y = self.env.collect_samples(indices, noise)
+        std = self.sensor_std if source == 'sensor' else self.camera_std
+        y = self.env.collect_samples(indices, std)
         for i in range(len(indices)):
             idx = indices[i]
             if source == 'sensor':
@@ -79,16 +74,16 @@ class Agent(object):
             if len(self.camera_data[i])>0 and len(self.sensor_data[i])>0:
                 yc = np.mean(self.camera_data[i])
                 ys = np.mean(self.sensor_data[i])
-                yeq = (self.camera_noise * ys + self.sensor_noise * yc) / (self.camera_noise + self.sensor_noise)
-                var = self.sensor_noise
+                yeq = (self.camera_std**2 * ys + self.sensor_std**2 * yc) / (self.camera_std**2 + self.sensor_std**2)
+                var = self.sensor_std**2
 
             elif len(self.sensor_data[i])>0:
                 yeq = np.mean(self.sensor_data[i])
-                var = self.sensor_noise
+                var = self.sensor_std**2
 
             elif len(self.camera_data[i])>0:
                 yeq = np.mean(self.camera_data[i])
-                var = self.camera_noise
+                var = self.camera_std**2
 
             else:
                 continue
@@ -179,25 +174,21 @@ class Agent(object):
 
     def predict_test(self, x):
         train_ind, train_y, train_var = self.get_sampled_dataset()
-        cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
-        cov_xx = self.gp.cov_mat(x)
-        cov_xa = self.gp.cov_mat(x, self.env.X[train_ind])
-
-        mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
-        mu = np.dot(mat1, train_y.reshape(-1,1))
-        cov = cov_xx - np.dot(mat1, cov_xa.T)
-        return mu, np.diag(cov)
+        train_x = self.env.X[train_ind]
+        likelihood_var = self.gp.model.likelihood.log_noise.exp().item()
+        mu = posterior_distribution(self.gp, train_x, train_y, self.env.test_x, train_var, likelihood_var=likelihood_var)
+        return mu
 
     def greedy(self, num_samples):
         # select most informative samples in a greedy manner
         n = self.env.num_samples
         camera_sampled = np.array([False if len(x)==0 else True for x in self.camera_data])
         camera_var = np.full(n, np.inf)
-        camera_var[camera_sampled] = self.camera_noise
+        camera_var[camera_sampled] = self.camera_std**2
         
         sensor_sampled = np.array([False if len(x)==0 else True for x in self.sensor_data])
         sensor_var = np.full(n, np.inf)
-        sensor_var[sensor_sampled] = self.sensor_noise
+        sensor_var[sensor_sampled] = self.sensor_std**2
         
         sampled = sensor_sampled | camera_sampled
         var = np.minimum(sensor_var[sampled], camera_var[sampled])
@@ -217,7 +208,7 @@ class Agent(object):
 
                 # modify sampled (temporarily)
                 sensor_sampled[i] = True
-                sensor_var[i] = self.sensor_noise
+                sensor_var[i] = self.sensor_std**2
                 sampled = sensor_sampled | camera_sampled
                 var = np.minimum(sensor_var[sampled], camera_var[sampled])
 
@@ -236,7 +227,7 @@ class Agent(object):
 
             # update sampled
             sensor_sampled[best_sample] = True
-            sensor_var[best_sample] = self.sensor_noise
+            sensor_var[best_sample] = self.sensor_std**2
  
             # if min(utilities) < 0:
             #     ipdb.set_trace()
@@ -248,7 +239,7 @@ class Agent(object):
 
         indices, _, var = self.get_sampled_dataset()
         all_ind = indices + new_gp_indices
-        all_var = np.concatenate([var, np.full(len(new_gp_indices), self.sensor_noise)])
+        all_var = np.concatenate([var, np.full(len(new_gp_indices), self.sensor_std**2)])
         
         cov_aa = self.cov_matrix[all_ind].T[all_ind].T + np.diag(all_var)
         l_inv = np.linalg.inv(np.linalg.cholesky(cov_aa))

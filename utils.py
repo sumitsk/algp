@@ -150,6 +150,7 @@ def process_variance(dim, variance):
         assert len(variance) == dim, 'Size mismatch!!'
         variance_ = np.diag(variance)
     elif isinstance(variance, np.ndarray):
+        variance = np.squeeze(variance)
         if variance.ndim == 1:
             assert len(variance) == dim, 'Size mismatch!!'
             variance_ = np.diag(variance)
@@ -226,42 +227,42 @@ def normalize(data, col_max=None):
     return data/col_max
 
 
-def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
-               title1=None, title2=None, title3=None, fig=None, ax=None):
-    if fig is None or ax is None:
-        fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-        axt, axp, axv = ax
+# def draw_plots(num_rows, num_cols, plot1, plot2, plot3, main_title=None,
+#                title1=None, title2=None, title3=None, fig=None, ax=None):
+#     if fig is None or ax is None:
+#         fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+#         axt, axp, axv = ax
 
-    # TODO: use seaborn 
-    title1 = 'Ground truth' if title1 is None else title1
-    axt.set_title(title1)
-    imt = axt.imshow(plot1.reshape(num_rows, num_cols),
-                     cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
-    div = make_axes_locatable(axt)
-    caxt = div.new_horizontal(size='5%', pad=.05)
-    fig.add_axes(caxt)
-    fig.colorbar(imt, caxt, orientation='vertical')
+#     # TODO: use seaborn 
+#     title1 = 'Ground truth' if title1 is None else title1
+#     axt.set_title(title1)
+#     imt = axt.imshow(plot1.reshape(num_rows, num_cols),
+#                      cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
+#     div = make_axes_locatable(axt)
+#     caxt = div.new_horizontal(size='5%', pad=.05)
+#     fig.add_axes(caxt)
+#     fig.colorbar(imt, caxt, orientation='vertical')
 
-    title2 = 'Predicted values' if title2 is None else title2
-    axp.set_title(title2)
-    imp = axp.imshow(plot2.reshape(num_rows, num_cols),
-                     cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
-    divm = make_axes_locatable(axp)
-    caxp = divm.new_horizontal(size='5%', pad=.05)
-    fig.add_axes(caxp)
-    fig.colorbar(imp, caxp, orientation='vertical')
+#     title2 = 'Predicted values' if title2 is None else title2
+#     axp.set_title(title2)
+#     imp = axp.imshow(plot2.reshape(num_rows, num_cols),
+#                      cmap='ocean', vmin=plot1.min(), vmax=plot1.max())
+#     divm = make_axes_locatable(axp)
+#     caxp = divm.new_horizontal(size='5%', pad=.05)
+#     fig.add_axes(caxp)
+#     fig.colorbar(imp, caxp, orientation='vertical')
 
-    title3 = 'Variance' if title3 is None else title3
-    axv.set_title(title3)
-    imv = axv.imshow(plot3.reshape(num_rows, num_cols), cmap='hot')
-    divv = make_axes_locatable(axv)
-    caxv = divv.new_horizontal(size='5%', pad=.05)
-    fig.add_axes(caxv)
-    fig.colorbar(imv, caxv, orientation='vertical')
+#     title3 = 'Variance' if title3 is None else title3
+#     axv.set_title(title3)
+#     imv = axv.imshow(plot3.reshape(num_rows, num_cols), cmap='hot')
+#     divv = make_axes_locatable(axv)
+#     caxv = divv.new_horizontal(size='5%', pad=.05)
+#     fig.add_axes(caxv)
+#     fig.colorbar(imv, caxv, orientation='vertical')
 
-    if main_title is not None:
-        fig.suptitle(main_title)
-    return fig
+#     if main_title is not None:
+#         fig.suptitle(main_title)
+#     return fig
 
 
 def compute_rmse(true, pred):
@@ -289,6 +290,27 @@ def fit_and_eval(gp, train_x, train_y, test_x, test_y, disp=False):
     return train_rmse, test_rmse
 
 
+def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_var=None, return_std=False, return_cov=False):
+    train_y_mean = np.mean(train_y)
+
+    # robust to the behavior of white noise kernel
+    cov_aa = gp.cov_mat(x1=train_x, var=train_var, add_likelihood_var=True)
+    cov_xx = gp.cov_mat(x1=test_x, var=test_var)
+    cov_xa = gp.cov_mat(x1=test_x, x2=train_x)
+
+    mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
+    mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean
+    
+    if return_std:
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, np.sqrt(np.diag(cov))
+    
+    if return_cov:
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, cov
+    return mu 
+
+
 def valid_neighbors(pose, grid_shape, dxdy=None):
     if dxdy is None:
         dxdy=[(0,1), (0,-1), (1,0), (-1,0)]
@@ -306,3 +328,10 @@ def weights_init(m):
         torch.nn.init.orthogonal_(m.weight.data)
         if m.bias is not None:
             m.bias.data.fill_(0)
+
+
+def get_monotonic_entropy_constant(cov_matrix):
+    eig_vals = np.linalg.eigvalsh(cov_matrix)
+    min_eig = min(eig_vals)
+    entropy_constant = -.5 * np.log(min_eig)
+    return entropy_constant

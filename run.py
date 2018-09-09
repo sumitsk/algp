@@ -9,6 +9,7 @@ import torch
 from xlrd import open_workbook
 from xlutils.copy import copy
 import ipdb
+from methods import ground_truth
 
 
 if __name__ == '__main__':
@@ -25,6 +26,8 @@ if __name__ == '__main__':
         json.dump(vars(args), f, indent=True)
 
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype)
+    ground_truth(env, args, args.sensor_std)
+
     agent = Agent(env, args)
     agent.run_ipp(render=args.render, num_runs=args.num_runs)
 

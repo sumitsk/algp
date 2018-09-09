@@ -24,8 +24,7 @@ class FieldEnv(object):
                                                                           extra_input_features=['grvi', 'leaf_fill'])
             # NOTE: self.X should contain samples row-wise
 
-            # take out a test set scattered uniformly across genotypes (per se)
-            # category-wise test set
+            # take out a category-wise test set scattered uniformly across genotypes
             test_inds = []
             for i in range(4):
                 ind = np.random.choice(np.where(self.category==i)[0], num_test//4, replace=False)
@@ -75,12 +74,10 @@ class FieldEnv(object):
         # NOTE: this is fine since we know in advance about the samples
         self.X = self.X.astype(float)
         self.X[:, :4] = zero_mean_unit_variance(self.X[:,:4])
-        self.Y = normalize(self.Y)
+        # self.Y = normalize(self.Y)
         
     def collect_samples(self, indices, noise_std):
-        # if true values is quite low, then noise term will dominate (instead, see if any scaled version makes sense here)
-        # TODO: noise should be in proportion to actual values
-        y = self.Y[indices]*(1 + np.random.normal(0, noise_std, size=len(indices)))
+        y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         return y
 
     def _setup_graph(self):
@@ -109,7 +106,7 @@ class FieldEnv(object):
         new_nodes, new_edges, remove_edges = get_new_nodes_and_edges(self.graph, self.map, [start] + waypoints)
         self.graph.add_nodes_from(new_nodes)
         self.graph.add_edges_from(new_edges)
-        # remove redundant edges (these edges have been replaced by multiple edges between waypoints and map junctions)
+        # remove redundant edges (these edges have been replaced by edges between waypoints and map junctions)
         self.graph.remove_edges_from(remove_edges)        
 
     def _post_search(self):
@@ -206,7 +203,7 @@ class FieldEnv(object):
             for i, path in enumerate(path_gen):
                 locs = [tree.node[p]['pose'] for p in path]
                 
-                # this step is computationally expensive
+                # this step is computationally expensive (determining indices on a path)
                 gp_indices = [self.gp_indices_between(locs[t],locs[t+1]) for t in range(len(path)-1)]
                 # need to add the last sampling location 
                 gp_indices = [item for sublist in gp_indices for item in sublist] + [self.map_pose_to_gp_index(locs[-1])]

@@ -1,52 +1,46 @@
+from models import GPR
+from utils import compute_rmse, posterior_distribution
 import numpy as np
-from utils import entropy_from_cov, manhattan_distance
 import ipdb
 
 
-# greedily select samples from the unvisited locations
-def greedy(X, sampled, cov, num_samples, pose=None, locs=None, max_distance=None, utility='entropy', entropy_constant=None):
-	'''
-	X - set of all possible sensing locations
-	sampled - boolean vector indicating which locations have been sampled
-	cov - K[X,X] covariance matrix of all locations
-	num_samples - number of samples to collect
-	utility - entropy/mutual information
-	'''
+def ground_truth(env, args, noise_std):
+	train_x = env.X
+	train_y = env.Y
+	train_var = np.full(len(env.X), noise_std**2)
+	test_x = env.test_X
+	test_y = env.test_Y
 
-	# if all three are provided, then distance constraint will be applied
-	distance_constraint = pose is not None and locs is not None and max_distance is not None
+	# train on the entire training set X
+	gp1 = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations)
+	gp1.fit(train_x, train_y, train_var, disp=False)
+	mu1 = gp1.predict(test_x)
+	rmse1 = compute_rmse(mu1, test_y)
+	
+	likelihood_var = gp1.likelihood.log_noise.exp().item()
+	mu1p = posterior_distribution(gp1, train_x, train_y, test_x, train_var, likelihood_var=likelihood_var)
+	rmse1p = compute_rmse(mu1p, test_y)
 
-	n = len(X)
-	cumm_utilities = []
-	new_samples = []
-	ent_v = entropy_from_cov(cov[sampled].T[sampled].T, entropy_constant)
+	# train on a subset D
+	gp2 = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations)
+	num_train = int(.75*len(train_x))
+	train_ind = np.random.permutation(len(train_x))[:num_train]
+	gp2.fit(train_x[train_ind], train_y[train_ind], train_var[train_ind], disp=False)
+	
+	# condition on D
+	mu2D = gp2.predict(test_x)
+	rmse2D = compute_rmse(mu2D, test_y)
 
-	for _ in range(num_samples):
-		utilities = np.full(n, -np.inf)
-		cond = ent_v + sum(cumm_utilities)
+	likelihood_var = gp2.likelihood.log_noise.exp().item()
+	mu2Dp = posterior_distribution(gp2, train_x[train_ind], train_y[train_ind], test_x, train_var[train_ind], likelihood_var=likelihood_var)
+	rmse2Dp = compute_rmse(mu2Dp, test_y)
 
-		for i in range(n):
-			# if entropy is monotonic, then this step is not necessary 
-			if sampled[i]:
-				continue
-			if distance_constraint:
-				ipdb.set_trace()
-				# TODO: bug: distance between two locations is not manhattan distance
-				if manhattan_distance(pose, locs[i]) > max_distance:
-					continue
-			org = sampled[i]
-			sampled[i] = True
+	# condition on X
+	gp2.set_train_data(train_x, train_y, train_var)
+	mu2X = gp2.predict(test_x)
+	rmse2X = compute_rmse(mu2X, test_y)
 
-			# a - set of all sampled locations 
-			cov_a = cov[sampled].T[sampled].T
-			ent_a = entropy_from_cov(cov_a, entropy_constant)
-			utilities[i] = ent_a - cond
-			sampled[i] = org
-
-		# NOTE: there can be multiple samples with the same utility (ignoring that for now)
-		best_sample = np.argmax(utilities)
-		cumm_utilities.append(utilities[best_sample])
-		new_samples.append(best_sample)
-		sampled[best_sample] = True
-
-	return new_samples, cumm_utilities
+	mu2Xp = posterior_distribution(gp2, train_x, train_y, test_x, train_var)
+	rmse2Xp = compute_rmse(mu2Xp, test_y)
+	
+	ipdb.set_trace()

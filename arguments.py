@@ -8,7 +8,6 @@ def get_args():
     parser = argparse.ArgumentParser(description='Adaptive Sampling and Informative Planning')
 
     # gp model 
-    parser.add_argument('--model_type', default='gpytorch_GP', help='one from {gpytorch_GP, sklearn_GP}')
     parser.add_argument('--lr', default=.01, type=float, help='learning rate of gpytorch model')
     parser.add_argument('--max_iterations', default=500, type=int, help='number of training iterations')
     parser.add_argument('--latent', default=None, help='latent function in gpytorch model')
@@ -24,8 +23,8 @@ def get_args():
     parser.add_argument('--utility', default='mutual_information', help='one from {mutual_information, entropy}')
     parser.add_argument('--strategy', default='informative', help='only supports informative for now!!')
     parser.add_argument('--precision_method', default='max', help='one from {max, sum}')
-    parser.add_argument('--camera_noise', default=.2, type=float, help='variance of camera measurements')
-    parser.add_argument('--sensor_noise', default=.05, type=float, help='variance of sensor measurements')
+    parser.add_argument('--camera_std', default=.2, type=float, help='standard deviation of camera measurements')
+    parser.add_argument('--sensor_std', default=.05, type=float, help='standard deviation of sensor measurements')
     parser.add_argument('--fraction_pretrain', default=.75, type=float, help='number of samples in pilot survey for model initialization')
     parser.add_argument('--num_samples_per_batch', default=5, type=int, help='number of samples collected by sensor in each batch')
     parser.add_argument('--render', action='store_true')
