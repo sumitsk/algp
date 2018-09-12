@@ -9,7 +9,6 @@ import pandas as pd
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
 
-
 class Node(object):
     def __init__(self, map_pose, gval, utility, parents_index, path=None):
         self.map_pose = map_pose
@@ -268,6 +267,53 @@ def normalize(data, col_max=None):
 def compute_rmse(true, pred):
     # return root mean square error betwee true values and predictions
     return np.linalg.norm(true.squeeze() - pred.squeeze()) / np.sqrt(len(true))
+
+
+def compute_mean_normalized_rmse(true, pred):
+    rmse = compute_rmse(true, pred)
+    return rmse/np.mean(true)
+
+
+def compute_range_normalized_rmse(true, pred):
+    rmse = compute_rmse(true, pred)
+    return rmse/(max(true)-min(true))
+
+
+def compute_iqr(x):
+    return np.subtract(*np.percentile(x, [75, 25]))
+
+
+def compute_iqr_normalized_rmse(true, pred):
+    rmse = compute_rmse(true, pred)
+    return rmse/compute_iqr(true)
+
+
+def compute_metric(true, preds, metric):
+    # preds is a list of predictions
+    if metric == 'rmse':
+        results = [compute_rmse(true, x) for x in preds]
+    elif metric == 'range_normalized_rmse':
+        results = [compute_range_normalized_rmse(true, x) for x in preds]
+    elif metric == 'mean_normalized_rmse':
+        results = [compute_mean_normalized_rmse(true, x) for x in preds]
+    elif metric == 'iqr_normalized_rmse':
+        results = [compute_iqr_normalized_rmse(true, x) for x in preds]
+    else:
+        raise NotImplementedError
+    return results
+
+
+def normal_dist_kldiv(mu1, cov1, mu2, cov2):
+    # return kL(f1, f2)
+    # f2 \sim N(mu1,cov1); f2 \sim N(mu2,sim2)
+
+    cov2_inv = np.linalg.inv(cov2)
+    diff = mu2-mu1
+    t1 = np.linalg.slogdet(cov2)[1] - np.linalg.slogdet(cov1)[1] 
+    t2 = np.trace(np.dot(cov2_inv, cov1)) - len(mu1)
+    t3 = np.dot(diff.T, np.dot(cov2_inv, diff))
+    kldiv = .5*(t1+t2+t3)
+    return kldiv
 
 
 def euclidean_distance(p0, p1):

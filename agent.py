@@ -1,5 +1,6 @@
 import ipdb
 import numpy as np
+import torch 
 
 from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant
 from graph_utils import get_heading
@@ -8,29 +9,38 @@ import time
 
 
 class Agent(object):
-    def __init__(self, env, args):
+    def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=False):
         super()
         self.env = env
-        self._init_models(args)
+        self.learn_likelihood_noise = learn_likelihood_noise
+        self._init_model(args)
 
         self.camera_std = args.camera_std
         self.sensor_std = args.sensor_std
         self.num_samples_per_batch = args.num_samples_per_batch
         self.beta = args.budget_factor
         self.update_every = args.update_every
-
+        
         self.reset()
-        num_pretrain = int(args.fraction_pretrain * self.env.num_samples)
-        self._pre_train(num_samples=num_pretrain)
-        self.pose = (0, 0)
-        self.heading = (1, 0)
-        self.path = np.copy(self.pose).reshape(-1, 2)
-        self.sensor_locations = np.empty((0, 2))
-        
-    def _init_models(self, args):
+        if parent_agent is None:
+            num_pretrain = int(args.fraction_pretrain * self.env.num_samples)
+            self._pre_train(num_samples=num_pretrain)
+        else:
+            self.load_model(parent_agent)
+
+    def _init_model(self, args):
         kernel_params = self._get_kernel_params(args)
-        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params, learn_likelihood_noise=True)
+        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params,
+                      learn_likelihood_noise=self.learn_likelihood_noise)
         
+    def load_model(self, parent_agent):
+        self.gp.reset(parent_agent.gp.train_x, parent_agent.gp.train_y, parent_agent.gp.train_var)
+        self.gp.model.load_state_dict(parent_agent.gp.model.state_dict())
+        
+    def save_model(self, filename):
+        state = {'state_dict': self.gp.model.state_dict()}
+        torch.save(state, filename)
+
     def _get_kernel_params(self, args):
         kernel_params = {'type': args.kernel}
         if args.kernel == 'spectral_mixture':
@@ -40,7 +50,11 @@ class Agent(object):
     def reset(self):
         self.sensor_data = [[] for _ in range(self.env.num_samples)]
         self.camera_data = [[] for _ in range(self.env.num_samples)]
-
+        self.pose = (0, 0)
+        self.heading = (1, 0)
+        self.path = np.copy(self.pose).reshape(-1, 2)
+        self.sensor_locations = np.empty((0, 2))
+        
     def _pre_train(self, num_samples):
         print('====================================================')
         print('--- Pretraining ---')
@@ -74,7 +88,7 @@ class Agent(object):
                 yc = np.mean(self.camera_data[i])
                 ys = np.mean(self.sensor_data[i])
                 yeq = (self.camera_std**2 * ys + self.sensor_std**2 * yc) / (self.camera_std**2 + self.sensor_std**2)
-                var = self.sensor_std**2
+                var = 1/(1/(self.sensor_std**2) + 1/(self.camera_std**2))
 
             elif len(self.sensor_data[i])>0:
                 yeq = np.mean(self.sensor_data[i])
@@ -102,10 +116,13 @@ class Agent(object):
 
     def _setup_ipp(self, criterion):
         self.criterion = criterion
+        self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_disabled=False, adaptive=False):
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, adaptive=False):
         # this function selects k points greedily and then finds the path that maximises the total information gain 
+
+        assert criterion in ['entropy', 'monotonic_entropy', 'mutual_information'], 'Unknown criterion!!'
         self._setup_ipp(criterion)
         results = []
         for i in range(num_runs):
@@ -120,7 +137,7 @@ class Agent(object):
             self.sensor_locations = np.concatenate([self.sensor_locations, next_sensor_locations]).astype(int)
             
             # Gather data along path only when camera is enabled
-            if not camera_disabled:          
+            if camera_enabled:          
                 print('------ Finding valid paths ---------')
                 print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
                 start = time.time()
@@ -135,6 +152,7 @@ class Agent(object):
                 next_path_indices = paths_indices[best_idx]
                 next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))
                 end = time.time()
+                print('Minimum cost: {} Best path cost: {}'.format(min(paths_cost), paths_cost[best_idx]))
                 print('Time consumed {:.4f}'.format(end - start))
                 
                 if render:
@@ -152,7 +170,8 @@ class Agent(object):
             
             print('\n-------- Prediction -------------- ')
             start = time.time()
-            pred, var = self.predict_test(self.env.test_X)
+            pred, cov = self.predict_test()
+            var = np.diag(cov)
             rmse = compute_rmse(pred, self.env.test_Y)
             print('RMSE: {:.4f}'.format(rmse))
             print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
@@ -160,7 +179,7 @@ class Agent(object):
             print('Time consumed {:.4f}'.format(end - start))
 
             # log predictions
-            res = {'mean': pred, 'variance': var, 'rmse': rmse}
+            res = {'mean': pred, 'covariance': cov, 'rmse': rmse}
             results.append(res)
 
             # update GP model
@@ -174,6 +193,7 @@ class Agent(object):
 
             run_end = time.time()
             print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
+            # ipdb.set_trace()
 
         print('==========================================================')
         print('--- Final statistics --- ')
@@ -199,11 +219,11 @@ class Agent(object):
         cov = cov_xx - np.dot(mat1, cov_xa.T)
         return mu, np.diag(cov)
 
-    def predict_test(self, x):
+    def predict_test(self):
         train_ind, train_y, train_var = self.get_sampled_dataset()
         train_x = self.env.X[train_ind]
-        mu, var = posterior_distribution(self.gp, train_x, train_y, self.env.test_X, train_var, return_var=True)
-        return mu, var
+        mu, cov = posterior_distribution(self.gp, train_x, train_y, self.env.test_X, train_var, return_cov=True)
+        return mu, cov
 
     def greedy(self, num_samples):
         # select most informative samples in a greedy manner

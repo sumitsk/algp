@@ -17,16 +17,17 @@ def get_args():
     parser.add_argument('--latent', default=None, help='latent function in gpytorch model')
     
     parser.add_argument('--num_runs', default=10, type=int, help='number of batches')
-    parser.add_argument('--fraction_pretrain', default=.5, type=float, help='number of samples in pilot survey for model initialization')
+    parser.add_argument('--fraction_pretrain', default=.75, type=float, help='number of samples in pilot survey for model initialization')
     parser.add_argument('--num_samples_per_batch', default=5, type=int, help='number of samples collected by sensor in each batch')
     parser.add_argument('--update_every', default=1, type=int, help='update gp model every ... batch')
     parser.add_argument('--budget_factor', default=1, type=float, help='budget = budget_factor * shortest path length')
+    parser.add_argument('--num_test', default=40, type=int, help='number of test samples')
 
     parser.add_argument('--adaptive', action='store_true', help='update gp model')
     parser.add_argument('--criterion', default='monotonic_entropy', help='one from {mutual_information, entropy, monotonic_entropy}')
-    parser.add_argument('--camera_disabled', action='store_true', help='no camera measurements')
-    parser.add_argument('--camera_std', default=.2, type=float, help='standard deviation of camera measurements')
-    parser.add_argument('--sensor_std', default=.05, type=float, help='standard deviation of sensor measurements')
+    parser.add_argument('--camera_enabled', action='store_true', help='include camera measurements')
+    parser.add_argument('--camera_std', default=.5, type=float, help='standard deviation of camera measurements')
+    parser.add_argument('--sensor_std', default=.1, type=float, help='standard deviation of sensor measurements')
     
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--seed', default=1, type=int, help='random seed')

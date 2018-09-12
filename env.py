@@ -2,13 +2,13 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, normalize, draw_path
+from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, normalize, draw_path, manhattan_distance
 from networkx import nx
 from copy import deepcopy
 from graph_utils import get_new_nodes_and_edges, edge_cost, get_heading, lower_bound_path_cost, find_merge_to_node
 import matplotlib.pyplot as plt
 
-
+          
 class FieldEnv(object):
     def __init__(self, num_rows=15, num_cols=15, data_file=None, phenotype='plant_count', num_test=40):
         super(FieldEnv, self).__init__()
@@ -79,7 +79,6 @@ class FieldEnv(object):
         # NOTE: this is fine since we know in advance about the samples
         self.X = self.X.astype(float)
         self.X[:, :4] = zero_mean_unit_variance(self.X[:,:4])
-        # self.Y = normalize(self.Y)
         
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
@@ -277,12 +276,26 @@ class FieldEnv(object):
         if least_cost is None:
             least_cost = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
         
+        gval = 0
+        if heading == (1,0) or heading == (-1,0):
+            junc = self.map.get_junction(start, heading)
+            x = start[0]
+            covered = [False]*len(waypoints)
+            while x != junc[0]:
+                pose = (x,start[1])
+                if pose in waypoints:
+                    covered[waypoints.index(pose)] = True
+                x = x + heading[0]
+            waypoints = [w for i,w in enumerate(waypoints) if not covered[i]]
+            gval = manhattan_distance(start, junc)
+            start = junc
+            
         nw = len(waypoints)
         tree = nx.DiGraph()
         # node attributes = {pos, gval, visited, heading}
 
         root = 0
-        tree.add_node(root, pose=start, heading=heading, visited=[False]*nw, gval=0)
+        tree.add_node(root, pose=start, heading=heading, visited=[False]*nw, gval=gval)
         open_list = [root]
         closed_list = []
         idx = root
@@ -312,7 +325,8 @@ class FieldEnv(object):
                 tree.add_node(idx, **child_node)
                 tree.add_edge(parent_idx, idx, weight=cost)
                 if sum(new_visited) == nw:
-                    least_cost = min(new_gval, least_cost)
+                    if new_gval < least_cost:
+                        least_cost = new_gval
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
@@ -386,14 +400,19 @@ class FieldEnv(object):
 
 if __name__ == '__main__':
     env = FieldEnv(data_file='data/female_gene_data/all_mean.pkl')
-    pose = (17,54)
-    heading = (1,0)
-    waypoints = [(1,22), (16,12), (11,38), (15,52), (3,68)]
-    least_cost = env.bnb_shortest_path(pose, heading, waypoints)
+    # pose = (17,54)
+    # heading = (1,0)
+    # waypoints = [(1,22), (16,12), (11,38), (15,52), (3,68)]
+    pose = (3,38)
+    heading = (-1,0)
+    waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
 
+
+    least_cost = env.bnb_shortest_path(pose, heading, waypoints)
     import time
 
     start = time.time()
     paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, beta=1)
     end = time.time()
     print('Time consumed: {:4f}'.format(end-start))
+    

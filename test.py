@@ -1,5 +1,5 @@
 import numpy as np 
-from utils import generate_gaussian_data, manhattan_distance, valid_neighbors, entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, draw_path
+from utils import generate_gaussian_data, manhattan_distance, valid_neighbors, entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, draw_path, set_seed
 import ipdb
 from models import GPR
 from networkx import nx
@@ -96,7 +96,7 @@ def draw_grid(ax, sz):
     radius = .1
     linewidth = 1.5
     color = 'green'
-    alpha = .2
+    alpha = .75
     for i in range(sz):
         for j in range(sz):
             pose = (i,j)
@@ -110,9 +110,12 @@ def draw_grid(ax, sz):
                 ax.add_artist(edge)
 
 
-def plot(sz, start, goal, paths):
+def plot(sz, start, goal, paths, titles=None):
+    plt.rcParams.update({'font.size': 22})
     fig, ax = plt.subplots(1,len(paths), figsize=(6,4))
-    for iax, path in zip(ax,paths):
+    # ax = ax.T.flatten()
+    for i in range(len(paths)):
+        iax, path= ax[i], paths[i]
         iax.get_xaxis().set_visible(False)
         iax.get_yaxis().set_visible(False)
         iax.set_xlim(-1, sz)
@@ -120,6 +123,10 @@ def plot(sz, start, goal, paths):
         iax.set_aspect(1)
         draw_grid(iax, sz)    
         draw_path(iax, path)
+        if titles is not None:
+            iax.set_title(titles[i])
+        iax.text(-.5,-.35, 'start')
+        iax.text(2.65, 3.25, 'goal')
     plt.show()
 
 
@@ -138,6 +145,8 @@ def path_to_indices(path, ind):
 
 
 if __name__ == '__main__':
+    set_seed(0)
+
     # show that using entropy as information gain criterion, informative planning is not suitable
     sz = 4
     x,y = generate_gaussian_data(sz, sz, k=2, min_var=.5, max_var=10)
@@ -145,13 +154,13 @@ if __name__ == '__main__':
 
     # learn gp hyperparameters
     n = len(x)
-    num_train = int(n)
+    num_train = int(.5*n)
     train_ind = np.random.permutation(n)[:num_train]
     gp.fit(x[train_ind],y[train_ind])
 
     start = (0,0)
     goal = (sz-1,sz-1)
-    budget = manhattan_distance(start, goal)*2
+    budget = manhattan_distance(start, goal)*(2.5)
     heading = (1,0)
     all_paths, all_paths_cost = find_all_paths((sz,sz), start, heading, goal, budget)
 
@@ -162,20 +171,21 @@ if __name__ == '__main__':
     best_idx = find_best_path(all_paths, sz, cov_matrix, ind, criterion='entropy')
     best_mod_idx = find_best_path(all_paths, sz, cov_matrix, ind, criterion='monotonic_entropy')
     best_mi_idx = find_best_path(all_paths, sz, cov_matrix, ind, criterion='mutual_information')
-    best_arv_idx = find_best_path(all_paths, sz, cov_matrix, ind, criterion='arv')
+    # best_arv_idx = find_best_path(all_paths, sz, cov_matrix, ind, criterion='arv')
 
     paths = [all_paths[best_idx], all_paths[best_mi_idx], all_paths[best_mod_idx]]
-    paths = [all_paths[best_idx], all_paths[best_mi_idx], all_paths[best_arv_idx], all_paths[best_mod_idx]]
-    plot(sz, start, goal, paths)
+    # paths = [all_paths[best_idx], all_paths[best_mi_idx], all_paths[best_arv_idx], all_paths[best_mod_idx]]
+    titles = ['Entropy', 'Mutual Information', 'Monotonic Entropy']
+    plot(sz, start, goal, paths, titles)
 
     rmse = predict(x, y, ind, all_paths[best_idx])
     rmse_mod = predict(x, y, ind, all_paths[best_mod_idx])
     rmse_mi = predict(x, y, ind, all_paths[best_mi_idx])
-    rmse_arv = predict(x, y, ind, all_paths[best_arv_idx])
+    # rmse_arv = predict(x, y, ind, all_paths[best_arv_idx])
 
     print('RMSE entropy: ', rmse)
     print('RMSE mutual information: ', rmse_mi)
-    print('RMSE arv: ', rmse_arv)
+    # print('RMSE arv: ', rmse_arv)
     print('RMSE modified entropy (ours): ', rmse_mod)
 
     ipdb.set_trace()

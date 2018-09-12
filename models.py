@@ -91,7 +91,7 @@ class NonLinearLatentFunction(nn.Module):
 
 
 class GPR(object):
-    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None, latent_params=None, learn_likelihood_noise=False):
+    def __init__(self, latent=None, lr=.01, max_iterations=200, kernel_params=None, latent_params=None, learn_likelihood_noise=True):
         self._train_x = None
         self._train_y = None
         self._train_y_mean = None
@@ -112,7 +112,13 @@ class GPR(object):
         return self._train_x.cpu().numpy()
 
     @property
+    def train_y(self):
+        return self._train_y.cpu().numpy()
+
+    @property
     def train_var(self):
+        if self._train_var is None:
+            return None
         return self._train_var.cpu().numpy()
 
     def reset(self, x, y, var):
@@ -126,7 +132,7 @@ class GPR(object):
     def set_train_data(self, x, y, var=None):
         self._train_x = to_torch(x)
         self._train_y = to_torch(y)
-        self._train_y_mean = self._train_y.mean()
+        self._train_y_mean = self._train_y.mean()      
         self._zero_mean_train_y = self._train_y - self._train_y_mean
         if var is not None:
             self._train_var = to_torch(var)
