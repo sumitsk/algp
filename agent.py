@@ -2,7 +2,7 @@ import ipdb
 import numpy as np
 import torch 
 
-from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant
+from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, find_least_cost_path
 from graph_utils import get_heading
 from models import GPR
 import time
@@ -62,7 +62,7 @@ class Agent(object):
         self._add_samples(ind, source='sensor')
         self.update_model()
         # if don't want to remember/condition on pre_train data points    
-        self.reset()    
+        # self.reset()    
         
     def _add_samples(self, indices, source='sensor'):
         std = self.sensor_std if source == 'sensor' else self.camera_std
@@ -114,24 +114,34 @@ class Agent(object):
         else:
             self.entropy_constant = None
 
-    def _setup_ipp(self, criterion):
+    def _setup_ipp(self, criterion, update):
         self.criterion = criterion
-        self.reset()
+        if not update:
+            self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, adaptive=False):
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, adaptive=True, total_samples=25, update=False, least_cost_path=False, slack=0):
         # this function selects k points greedily and then finds the path that maximises the total information gain 
 
         assert criterion in ['entropy', 'monotonic_entropy', 'mutual_information'], 'Unknown criterion!!'
-        self._setup_ipp(criterion)
-        results = []
+        self._setup_ipp(criterion, update)
+
+        if not adaptive:
+            num_runs = 1
+            num_samples_per_batch = total_samples
+        else:
+            num_samples_per_batch = self.num_samples_per_batch
+        
+        least_cost_paths = 0
+        test_rmse = []
+
         for i in range(num_runs):
             print('\n==================================================================================================')
             print('Run {}/{}'.format(i+1, num_runs))
             run_start = time.time()
             
             # greedily select samples to be collected by sensors
-            new_gp_indices = self.greedy(self.num_samples_per_batch)  
+            new_gp_indices = self.greedy(num_samples_per_batch)  
             waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
             next_sensor_locations = np.stack(waypoints)
             self.sensor_locations = np.concatenate([self.sensor_locations, next_sensor_locations]).astype(int)
@@ -141,20 +151,32 @@ class Agent(object):
                 print('------ Finding valid paths ---------')
                 print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
                 start = time.time()
-                paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, self.beta)
+                least_cost = self.env.bnb_shortest_path(self.pose, self.heading, waypoints)
+                print('Least cost:',least_cost)
+                
+                budget = least_cost + slack
+                paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, least_cost, budget)
                 end = time.time()
                 print('Number of feasible paths: ', len(paths_indices))
                 print('Time consumed {:.4f}'.format(end - start))
 
                 print('\n------ Finding best path ----------')
                 start = time.time()
-                best_idx = self.best_path(paths_indices, new_gp_indices)
+                if least_cost_path:
+                    best_idx = find_least_cost_path(paths_cost)
+                else:
+                    best_idx = self.best_path(paths_indices, new_gp_indices)
+
                 next_path_indices = paths_indices[best_idx]
                 next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))
                 end = time.time()
-                print('Minimum cost: {} Best path cost: {}'.format(min(paths_cost), paths_cost[best_idx]))
+                print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
                 print('Time consumed {:.4f}'.format(end - start))
                 
+                # BUG: least cost is not actually the least cost
+                if least_cost >= paths_cost[best_idx]:
+                    least_cost_paths += 1
+
                 if render:
                     self.env.render(paths_checkpoints[best_idx], self.path, next_sensor_locations, self.sensor_locations)
                 
@@ -168,6 +190,15 @@ class Agent(object):
             
             self._add_samples(new_gp_indices, source='sensor')
             
+            # update hyperparameters of GP model
+            if update and (i+1) % self.update_every == 0:
+                print('\n---------- Updating model --------------')
+                start = time.time()
+                self.update_model()
+                self._post_update()
+                end = time.time()
+                print('Time consumed {:.4f}'.format(end - start))
+
             print('\n-------- Prediction -------------- ')
             start = time.time()
             pred, cov = self.predict_test()
@@ -179,18 +210,9 @@ class Agent(object):
             print('Time consumed {:.4f}'.format(end - start))
 
             # log predictions
-            res = {'mean': pred, 'covariance': cov, 'rmse': rmse}
-            results.append(res)
-
-            # update GP model
-            if adaptive and (i+1) % self.update_every == 0:
-                print('\n---------- Updating model --------------')
-                start = time.time()
-                self.update_model()
-                self._post_update()
-                end = time.time()
-                print('Time consumed {:.4f}'.format(end - start))
-
+            # res = {'mean': pred, 'covariance': cov, 'rmse': rmse}
+            test_rmse.append(rmse)
+            
             run_end = time.time()
             print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
             # ipdb.set_trace()
@@ -204,6 +226,8 @@ class Agent(object):
         # path, camera samples, sensor samples
         # self.path, self.sensor_locations
         # save these statistics and path and sensing locations to compare results later on
+        mobile_samples_count = [len(x) for x in self.camera_data]
+        results = {'least_cost_paths': least_cost_paths, 'rmse': test_rmse, 'mobile_samples_count': mobile_samples_count}
         return results
 
     def predict_train(self, test_ind=None):

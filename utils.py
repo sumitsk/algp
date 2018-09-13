@@ -59,10 +59,10 @@ def load_data(filename):
 
 def load_dataframe(filename, target_feature, extra_input_features=[]):
     df = pd.read_pickle(filename)
-    num_rows = 15
-    num_cols = 37
     X = np.vstack(df[['X']].values.squeeze())
     row_range = X[:, :2]
+    num_rows = 15
+    num_cols = int(X[:,1].max())
     gene = X[:, 2:]
     ph_vals = np.hstack([df[[f]].values for f in extra_input_features])
     final_x = np.concatenate([row_range, ph_vals, gene], axis=1)
@@ -406,3 +406,9 @@ def draw_path(ax, path, head_width=None, head_length=None, linewidth=None, delta
         ax.arrow(source[0], source[1], dx, dy,
                  head_width=head_width, head_length=head_length,
                  linewidth=linewidth, color=arrow_color, alpha=1)
+
+
+def find_least_cost_path(paths_cost):
+    least_cost = min(paths_cost)
+    indices = np.where(np.array(paths_cost)==least_cost)[0]
+    return np.random.choice(indices)

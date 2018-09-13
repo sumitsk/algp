@@ -1,0 +1,8 @@
+plant count
+
+10 simulations
+ll_noise  = True
+criterion = monotonic_entropy
+static_noise = .1
+mobile_noise = .5
+fraction_pretrain = .75

@@ -20,9 +20,15 @@ from copy import deepcopy
 # import torch
 # torch.manual_seed(seed)
 
+import pandas as pd
+import seaborn as sns
 
-def evaluate(agent, args, criterion, camera_enabled, adaptive, metric, true_values, oracle):
-    results = agent.run_ipp(num_runs=args.num_runs, criterion=criterion, camera_enabled=camera_enabled, adaptive=adaptive)
+plt.rcParams.update({'font.size': 22})
+    
+
+
+def evaluate(agent, args, criterion, camera_enabled, metric, true_values, oracle):
+    results = agent.run_ipp(num_runs=args.num_runs, criterion=criterion, camera_enabled=camera_enabled)
     kldiv = normal_dist_kldiv(results[-1]['mean'], results[-1]['covariance'], oracle['mean'], oracle['covariance'])
     means = [x['mean'] for x in results]
     err = compute_metric(true_values, means, metric=metric)
@@ -42,56 +48,110 @@ def get_heatmap(env):
                 plot[i,j] = env.category[plot[i,j]]
     ipdb.set_trace()
 
-if __name__ == '__main__':
-    args = get_args()
+
+def static_vs_both(args):
+    # compare static and static+mobile adaptive sampling setting
+    # on a held out test set, plot rmse vs number of static samples
+
     args_dict = vars(args)
     pprint(args_dict)
     
-    # Save arguments as json file
-    if not args.eval_only:
-        with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
-            json.dump(vars(args), f, indent=True)
-
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
     
-    # get_heatmap(env)
-    agent_common = Agent(env, args, learn_likelihood_noise=True)
+    ll_noise = True
+    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
     all_res = []
     all_res_camera = []
 
-    # res1 = agent1.run_ipp(num_runs=args.num_runs, criterion='entropy', camera_enabled=True, adaptive=False, render=False)
-    for _ in range(10):
+    sims = 3
+    for _ in range(sims):
         env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
-        agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=True)
-        res1 = agent1.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', camera_enabled=False, adaptive=False, render=False)
+        agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
+        res1 = agent1.run_ipp(num_runs=2*args.num_runs, criterion='monotonic_entropy', camera_enabled=False, render=False)
         all_res.append([x['rmse'] for x in res1])
-        
-        agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=True)
-        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', camera_enabled=True, adaptive=False, render=False)
+
+        agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
+        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', camera_enabled=True, render=False)
         all_res_camera.append([x['rmse'] for x in res2])
 
+    r1 = np.stack(all_res)
+    x1 = np.arange(1, 2*args.num_runs+1)*args.num_samples_per_batch
+    x1all = np.stack([x1 for _ in range(sims)]).flatten()
+
+    rc = np.stack(all_res_camera)
+    xc = np.arange(1, args.num_runs+1)*args.num_samples_per_batch
+    xcall = np.stack([xc for _ in range(sims)]).flatten()
+    dict1 = {'Static samples': x1all, 'RMSE': r1.flatten()}
+    dictc = {'Static samples': xcall, 'RMSE': rc.flatten()}
+    df1 = pd.DataFrame.from_dict(dict1)
+    dfc = pd.DataFrame.from_dict(dictc)
+    
+    ax = sns.lineplot(x='Static samples', y='RMSE', data=df1, label='Static')
+    sns.lineplot(x='Static samples', y='RMSE', data=dfc, label='Static + Mobile', ax=ax)
+    # set these according to phenotype
+    plt.title('Plant Height')
+    plt.xlabel('Static Samples')
+    plt.ylabel('Test RMSE')
+    plt.show()
     ipdb.set_trace()
 
-    # res3 = agent3.run_ipp(num_runs=args.num_runs, criterion='entropy', camera_enabled=False, adaptive=False, render=False)
+
+if __name__ == '__main__':
+    
+    args = get_args()
+
+    env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    ll_noise = True
+    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
+    
+    all_res1 = []
+    all_res2 = []
+    all_res3 = []
+    slack = 10
+    update = True
+    
+    for i in range(5):
+        agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
+        res1 = agent1.run_ipp(num_runs=args.num_runs, update=update, criterion='entropy', camera_enabled=True, least_cost_path=True)
+
+        agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
+        res2 = agent2.run_ipp(num_runs=args.num_runs, update=update, criterion='entropy', camera_enabled=True, least_cost_path=False, slack=slack)
+
+        agent3 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
+        res3 = agent3.run_ipp(num_runs=args.num_runs, update=update, criterion='monotonic_entropy', camera_enabled=True, least_cost_path=False, slack=slack)
+        
+        all_res1.append(res1)
+        all_res2.append(res2)
+        all_res3.append(res3)
+
+        ipdb.set_trace()
+
+    ipdb.set_trace()
+    # Save arguments as json file
+    # if not args.eval_only:
+    #     with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
+    #         json.dump(vars(args), f, indent=True)
+
+    # res3 = agent3.run_ipp(num_runs=args.num_runs, criterion='entropy', camera_enabled=False, render=False)
     
     # oracle = ground_truth(env, args)
     # # only sensor, entropy
-    # ent_rmse, ent_kldiv = evaluate(agent, args, criterion='entropy', camera_enabled=False, adaptive=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
+    # ent_rmse, ent_kldiv = evaluate(agent, args, criterion='entropy', camera_enabled=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
 
     # # only sensor, mutual information
-    # # mi_rmse, mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=False, adaptive=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
+    # # mi_rmse, mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
 
     # # both, monotonic entropy
-    # both_mono_ent_rmse, both_mono_ent_kldiv = evaluate(agent, args, criterion='monotonic_entropy', camera_enabled=True, adaptive=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
+    # both_mono_ent_rmse, both_mono_ent_kldiv = evaluate(agent, args, criterion='monotonic_entropy', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
     
 
     # # both, entropy
     # agent2 = Agent(env, args)
-    # both_ent_rmse, both_ent_kldiv = evaluate(agent2, args, criterion='entropy', camera_enabled=True, adaptive=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
+    # both_ent_rmse, both_ent_kldiv = evaluate(agent2, args, criterion='entropy', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
     
     
     # # both, mutual information 
-    # # both_mi_rmse, both_mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=True, adaptive=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
+    # # both_mi_rmse, both_mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
     
 
     # ipdb.set_trace()

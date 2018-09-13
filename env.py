@@ -116,7 +116,7 @@ class FieldEnv(object):
     def _post_search(self):
         self.graph = deepcopy(self.backup_graph)
 
-    def get_shortest_path_waypoints(self, start, heading, waypoints, beta=1):
+    def get_shortest_path_waypoints(self, start, heading, waypoints, least_cost, budget):
         self._pre_search(start, waypoints)
 
         # start_time = time.time()
@@ -132,7 +132,7 @@ class FieldEnv(object):
 
         # an upper bound on the shortest path length (always moving to the nearest waypoint)
         # shortest_length = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
-        shortest_length = self.bnb_shortest_path(start, heading, waypoints)
+        # shortest_length = self.bnb_shortest_path(start, heading, waypoints)
 
         # for efficieny, it will be beneficial if nodes are expanded in increasing order of gval
         idx = root
@@ -159,8 +159,8 @@ class FieldEnv(object):
 
                 remaining_waypoints = [w for i,w in enumerate(waypoints) if not new_visited[i]]
                 # min_dist_to_go = lower_bound_path_cost(new_pose, remaining_waypoints)
-                min_dist_to_go = self.bnb_shortest_path(new_pose, new_heading, remaining_waypoints, shortest_length)
-                if new_gval + min_dist_to_go > beta * shortest_length:
+                min_dist_to_go = self.bnb_shortest_path(new_pose, new_heading, remaining_waypoints, least_cost)
+                if new_gval + min_dist_to_go > budget:
                     continue
                 
                 new_tree_node = dict(pose=new_pose, heading=new_heading, visited=new_visited, gval=new_gval)
@@ -187,7 +187,7 @@ class FieldEnv(object):
                 tree.add_edge(parent_idx, idx, weight=cost)
 
                 if sum(new_visited) == nw:
-                    shortest_length = min(new_gval, shortest_length)
+                    # shortest_length = min(new_gval, shortest_length)
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
@@ -219,6 +219,7 @@ class FieldEnv(object):
 
         # end_time = time.time()
         # print('Time {:4f}'.format(end_time-start_time))
+
         # visualize tree 
         # import matplotlib.pyplot as plt
         # pos = nx.get_node_attributes(tree, 'pose')
@@ -277,19 +278,25 @@ class FieldEnv(object):
             least_cost = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
         
         gval = 0
-        if heading == (1,0) or heading == (-1,0):
+        if start[0] not in self.map.row_pass_indices and (heading == (1,0) or heading == (-1,0)):
             junc = self.map.get_junction(start, heading)
             x = start[0]
             covered = [False]*len(waypoints)
+            costs = [-1]*len(waypoints)
             while x != junc[0]:
                 pose = (x,start[1])
                 if pose in waypoints:
-                    covered[waypoints.index(pose)] = True
+                    itr = waypoints.index(pose)
+                    covered[itr] = True
+                    costs[itr] = abs(start[0] - x)
                 x = x + heading[0]
             waypoints = [w for i,w in enumerate(waypoints) if not covered[i]]
+            if len(waypoints) == 0:
+                return max(costs)
             gval = manhattan_distance(start, junc)
             start = junc
-            
+        
+
         nw = len(waypoints)
         tree = nx.DiGraph()
         # node attributes = {pos, gval, visited, heading}
@@ -403,16 +410,23 @@ if __name__ == '__main__':
     # pose = (17,54)
     # heading = (1,0)
     # waypoints = [(1,22), (16,12), (11,38), (15,52), (3,68)]
+    
     pose = (3,38)
     heading = (-1,0)
     waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
 
+    # pose = (7,64)
+    # heading = (-1,0)
+    # waypoints = [(13,56), (8,8), (10,8), (7,38), (1,40)]
 
     least_cost = env.bnb_shortest_path(pose, heading, waypoints)
+    ipdb.set_trace()
+    
     import time
-
     start = time.time()
-    paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, beta=1)
+    budget = least_cost
+    paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, least_cost, budget)
     end = time.time()
     print('Time consumed: {:4f}'.format(end-start))
+    ipdb.set_trace()
     
