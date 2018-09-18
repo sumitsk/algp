@@ -2,28 +2,28 @@ import ipdb
 import numpy as np
 import torch 
 
-from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, find_least_cost_path
+from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, find_shortest_path, find_equi_sample_path
 from graph_utils import get_heading
 from models import GPR
 import time
 
 
 class Agent(object):
-    def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=False):
+    def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=True, camera_std=None, sensor_std=None):
         super()
         self.env = env
         self.learn_likelihood_noise = learn_likelihood_noise
         self._init_model(args)
 
-        self.camera_std = args.camera_std
-        self.sensor_std = args.sensor_std
+        self.camera_std = args.camera_std if camera_std is None else camera_std
+        self.sensor_std = args.sensor_std if sensor_std is None else sensor_std
         self.num_samples_per_batch = args.num_samples_per_batch
-        self.beta = args.budget_factor
         self.update_every = args.update_every
         
         self.reset()
         if parent_agent is None:
             num_pretrain = int(args.fraction_pretrain * self.env.num_samples)
+            # num_pretrain = args.num_pretrain
             self._pre_train(num_samples=num_pretrain)
         else:
             self.load_model(parent_agent)
@@ -33,6 +33,12 @@ class Agent(object):
         self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params,
                       learn_likelihood_noise=self.learn_likelihood_noise)
         
+    def _get_kernel_params(self, args):
+        kernel_params = {'type': args.kernel}
+        if args.kernel == 'spectral_mixture':
+            kernel_params['n_mixtures'] = args.n_mixtures
+        return kernel_params
+
     def load_model(self, parent_agent):
         self.gp.reset(parent_agent.gp.train_x, parent_agent.gp.train_y, parent_agent.gp.train_var)
         self.gp.model.load_state_dict(parent_agent.gp.model.state_dict())
@@ -40,12 +46,6 @@ class Agent(object):
     def save_model(self, filename):
         state = {'state_dict': self.gp.model.state_dict()}
         torch.save(state, filename)
-
-    def _get_kernel_params(self, args):
-        kernel_params = {'type': args.kernel}
-        if args.kernel == 'spectral_mixture':
-            kernel_params['n_mixtures'] = args.n_mixtures
-        return kernel_params
 
     def reset(self):
         self.sensor_data = [[] for _ in range(self.env.num_samples)]
@@ -88,7 +88,7 @@ class Agent(object):
                 yc = np.mean(self.camera_data[i])
                 ys = np.mean(self.sensor_data[i])
                 yeq = (self.camera_std**2 * ys + self.sensor_std**2 * yc) / (self.camera_std**2 + self.sensor_std**2)
-                var = 1/(1/(self.sensor_std**2) + 1/(self.camera_std**2))
+                var = 1 / (1/(self.sensor_std**2) + 1/(self.camera_std**2))
 
             elif len(self.sensor_data[i])>0:
                 yeq = np.mean(self.sensor_data[i])
@@ -120,18 +120,12 @@ class Agent(object):
             self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, adaptive=True, total_samples=25, update=False, least_cost_path=False, slack=0):
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, update=False, slack=0, strategy='max_ent'):
         # this function selects k points greedily and then finds the path that maximises the total information gain 
-
-        assert criterion in ['entropy', 'monotonic_entropy', 'mutual_information'], 'Unknown criterion!!'
+        assert strategy in ['max_ent', 'shortest', 'equi_sample'], 'Unknown strategy!!'
+        assert criterion in ['entropy', 'mutual_information'], 'Unknown criterion!!'
         self._setup_ipp(criterion, update)
 
-        if not adaptive:
-            num_runs = 1
-            num_samples_per_batch = total_samples
-        else:
-            num_samples_per_batch = self.num_samples_per_batch
-        
         least_cost_paths = 0
         test_rmse = []
 
@@ -140,8 +134,8 @@ class Agent(object):
             print('Run {}/{}'.format(i+1, num_runs))
             run_start = time.time()
             
-            # greedily select samples to be collected by sensors
-            new_gp_indices = self.greedy(num_samples_per_batch)  
+            # greedily select static samples
+            new_gp_indices = self.greedy(self.num_samples_per_batch)  
             waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
             next_sensor_locations = np.stack(waypoints)
             self.sensor_locations = np.concatenate([self.sensor_locations, next_sensor_locations]).astype(int)
@@ -151,30 +145,32 @@ class Agent(object):
                 print('------ Finding valid paths ---------')
                 print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
                 start = time.time()
-                least_cost = self.env.bnb_shortest_path(self.pose, self.heading, waypoints)
-                print('Least cost:',least_cost)
+
+                least_cost_ub = self.env.get_heuristic_cost(self.pose, self.heading, waypoints)
+                print('Least cost upper bound:',least_cost_ub)
                 
-                budget = least_cost + slack
-                paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, least_cost, budget)
+                paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, least_cost_ub, slack)
                 end = time.time()
                 print('Number of feasible paths: ', len(paths_indices))
                 print('Time consumed {:.4f}'.format(end - start))
 
                 print('\n------ Finding best path ----------')
                 start = time.time()
-                if least_cost_path:
-                    best_idx = find_least_cost_path(paths_cost)
+                if strategy == 'shortest':
+                    best_idx = find_shortest_path(paths_cost)
                 else:
                     best_idx = self.best_path(paths_indices, new_gp_indices)
+                    if strategy == 'equi_sample':
+                        best_idx = find_equi_sample_path(paths_indices, best_idx)
 
                 next_path_indices = paths_indices[best_idx]
                 next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))
                 end = time.time()
+                least_cost = min(paths_cost)
                 print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
                 print('Time consumed {:.4f}'.format(end - start))
                 
-                # BUG: least cost is not actually the least cost
-                if least_cost >= paths_cost[best_idx]:
+                if least_cost == paths_cost[best_idx]:
                     least_cost_paths += 1
 
                 if render:
@@ -185,7 +181,7 @@ class Agent(object):
                 self.pose = tuple(self.path[-1])
                 self.heading = get_heading(self.path[-1], self.path[-2])
         
-                # add samples (camera and sensor)
+                # add samples
                 self._add_samples(next_path_indices, source='camera')
             
             self._add_samples(new_gp_indices, source='sensor')
@@ -203,7 +199,7 @@ class Agent(object):
             start = time.time()
             pred, cov = self.predict_test()
             var = np.diag(cov)
-            rmse = compute_rmse(pred, self.env.test_Y)
+            rmse = compute_rmse(self.env.test_Y, pred)
             print('RMSE: {:.4f}'.format(rmse))
             print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
             end = time.time()
@@ -215,33 +211,28 @@ class Agent(object):
             
             run_end = time.time()
             print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
-            # ipdb.set_trace()
 
         print('==========================================================')
         print('--- Final statistics --- ')
         print('RMSE: {:.4f}'.format(rmse))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
 
-        # TODO: log relevant things
-        # path, camera samples, sensor samples
-        # self.path, self.sensor_locations
-        # save these statistics and path and sensing locations to compare results later on
-        mobile_samples_count = [len(x) for x in self.camera_data]
-        results = {'least_cost_paths': least_cost_paths, 'rmse': test_rmse, 'mobile_samples_count': mobile_samples_count}
+        # results = {'least_cost_paths': least_cost_paths, 'rmse': test_rmse, 'mobile_samples_count': mobile_samples_count}
+        results = {'mean': pred, 'rmse':test_rmse}
         return results
 
-    def predict_train(self, test_ind=None):
-        test_ind = np.arange(self.env.num_samples) if test_ind is None else test_ind
-        train_ind, train_y, train_var = self.get_sampled_dataset()
+    # def predict_train(self, test_ind=None):
+    #     test_ind = np.arange(self.env.num_samples) if test_ind is None else test_ind
+    #     train_ind, train_y, train_var = self.get_sampled_dataset()
 
-        cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
-        cov_xx = self.cov_matrix[test_ind].T[test_ind].T
-        cov_xa = self.cov_matrix[test_ind].T[train_ind].T
+    #     cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
+    #     cov_xx = self.cov_matrix[test_ind].T[test_ind].T
+    #     cov_xa = self.cov_matrix[test_ind].T[train_ind].T
 
-        mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
-        mu = np.dot(mat1, train_y.reshape(-1,1))
-        cov = cov_xx - np.dot(mat1, cov_xa.T)
-        return mu, np.diag(cov)
+    #     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
+    #     mu = np.dot(mat1, train_y.reshape(-1,1))
+    #     cov = cov_xx - np.dot(mat1, cov_xa.T)
+    #     return mu, np.diag(cov)
 
     def predict_test(self):
         train_ind, train_y, train_var = self.get_sampled_dataset()
@@ -261,35 +252,37 @@ class Agent(object):
         sensor_var[sensor_sampled] = self.sensor_std**2
         
         sampled = sensor_sampled | camera_sampled
-        var = np.minimum(sensor_var[sampled], camera_var[sampled])
+        var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
         cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
         ent_v = entropy_from_cov(cov_v, self.entropy_constant)
 
         cumm_utilities = []
         new_samples = []
         for _ in range(num_samples):
-            utilities = np.full(n, 0.0)
+            utilities = np.full(n, -np.inf)
             cond = ent_v + sum(cumm_utilities)
 
             for i in range(n):
-                # if entropy is monotonic, then this step is not necessary (however better for efficiency)
-                # NOTE: for camera sampled indices, the conditional entropy is negative so disallowing that also
-                if sensor_sampled[i] or camera_sampled[i]:
+                if sensor_sampled[i]:
                     continue
 
                 # modify sampled (temporarily)
                 sensor_sampled[i] = True
                 sensor_var[i] = self.sensor_std**2
                 sampled = sensor_sampled | camera_sampled
-                var = np.minimum(sensor_var[sampled], camera_var[sampled])
-
+                var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
+        
                 # a - set of all sampled locations 
                 cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
                 ent_a = entropy_from_cov(cov_a, self.entropy_constant)
                 if self.criterion == 'mutual_information':
                     cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
                     ent_abar = entropy_from_cov(cov_abar)
-                    cov_all = self.cov_matrix + np.diag(np.concatenate([var, np.zeros(sum(~sampled))]))
+                    
+                    precision = 1.0/sensor_var + 1.0/camera_var
+                    precision[precision==0] = np.inf
+                    var = 1.0 / precision
+                    cov_all = self.cov_matrix + np.diag(var)
                     ent_all = entropy_from_cov(cov_all)
                     ut = ent_a + ent_abar - ent_all
                 else:
@@ -304,38 +297,57 @@ class Agent(object):
             best_sample = np.argmax(utilities)
             cumm_utilities.append(utilities[best_sample])
             new_samples.append(best_sample)
-
             # update sampled
             sensor_sampled[best_sample] = True
             sensor_var[best_sample] = self.sensor_std**2
  
-            # if min(utilities) < 0:
-            #     ipdb.set_trace()
         return new_samples
 
-    def best_path(self, paths_indices, new_gp_indices):
-        if len(paths_indices) == 1:
+    def best_path(self, paths_mobile_indices, static_indices):
+        # paths_indices contains mobile sensing indices on the path
+        # static_indices is the set of static sensing indices 
+
+        if len(paths_mobile_indices) == 1:
             return 0
 
-        indices, _, var = self.get_sampled_dataset()
-        all_ind = indices + new_gp_indices
-        all_var = np.concatenate([var, np.full(len(new_gp_indices), self.sensor_std**2)])
+        n = self.env.num_samples
+        org_camera_sampled = np.array([False if len(x)==0 else True for x in self.camera_data])
         
-        cov_aa = self.cov_matrix[all_ind].T[all_ind].T + np.diag(all_var)
-        l_inv = np.linalg.inv(np.linalg.cholesky(cov_aa))
-        cov_aa_inv = np.dot(l_inv.T, l_inv)
+        sensor_sampled = np.array([False if len(x)==0 else True for x in self.sensor_data])
+        sensor_sampled[static_indices] = True
+        sensor_var = np.full(n, np.inf)
+        sensor_var[sensor_sampled] = self.sensor_std**2
+        
+        all_ut = []
+        for i in range(len(paths_mobile_indices)):
+            camera_sampled = np.copy(org_camera_sampled)
+            mobile_indices = paths_mobile_indices[i]
+            camera_sampled[mobile_indices] = True
+            
+            camera_var = np.full(n, np.inf)
+            camera_var[camera_sampled] = self.camera_std**2
+        
+            sampled = sensor_sampled | camera_sampled
+            var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
+        
+            # a - set of all sampled locations 
+            cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
+            ent_a = entropy_from_cov(cov_a, self.entropy_constant)
+            if self.criterion == 'mutual_information':
+                cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
+                ent_abar = entropy_from_cov(cov_abar)
+                
+                precision = 1.0/sensor_var + 1.0/camera_var
+                precision[precision==0] = np.inf
+                var = 1.0 / precision
+                cov_all = self.cov_matrix + np.diag(var)
+                ent_all = entropy_from_cov(cov_all)
+                ut = ent_a + ent_abar - ent_all
+            else:
+                ut = ent_a
+            all_ut.append(ut)
 
-        all_ind_set = set(all_ind)
-        all_h = []
-        for i in range(len(paths_indices)):
-            new_camera_ind = list(set(paths_indices[i]) - all_ind_set)
-            cov_xx = self.cov_matrix[new_camera_ind].T[new_camera_ind].T
-            cov_xa = self.cov_matrix[new_camera_ind].T[all_ind].T
-
-            cov = cov_xx - np.dot(cov_xa, np.dot(cov_aa_inv, cov_xa.T))
-            h = entropy_from_cov(cov, self.entropy_constant)
-            all_h.append(h)
-        idx = np.argmax(all_h)
+        idx = np.argmax(all_ut)
         return idx
 
         

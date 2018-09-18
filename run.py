@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import ipdb
 from utils import compute_metric, normal_dist_kldiv
-from methods import ground_truth
+# from methods import ground_truth
 from copy import deepcopy
 
 # seed = 0
@@ -99,73 +99,17 @@ def static_vs_both(args):
 if __name__ == '__main__':
     
     args = get_args()
-
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
     ll_noise = True
-    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
-    
-    all_res1 = []
-    all_res2 = []
-    all_res3 = []
-    slack = 10
-    update = True
-    
-    for i in range(5):
-        agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res1 = agent1.run_ipp(num_runs=args.num_runs, update=update, criterion='entropy', camera_enabled=True, least_cost_path=True)
+    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)    
 
-        agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res2 = agent2.run_ipp(num_runs=args.num_runs, update=update, criterion='entropy', camera_enabled=True, least_cost_path=False, slack=slack)
-
-        agent3 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res3 = agent3.run_ipp(num_runs=args.num_runs, update=update, criterion='monotonic_entropy', camera_enabled=True, least_cost_path=False, slack=slack)
-        
-        all_res1.append(res1)
-        all_res2.append(res2)
-        all_res3.append(res3)
-
-        ipdb.set_trace()
-
+    results = agent_common.run_ipp(camera_enabled=True, update=False)
     ipdb.set_trace()
+
     # Save arguments as json file
     # if not args.eval_only:
     #     with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
     #         json.dump(vars(args), f, indent=True)
-
-    # res3 = agent3.run_ipp(num_runs=args.num_runs, criterion='entropy', camera_enabled=False, render=False)
-    
-    # oracle = ground_truth(env, args)
-    # # only sensor, entropy
-    # ent_rmse, ent_kldiv = evaluate(agent, args, criterion='entropy', camera_enabled=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
-
-    # # only sensor, mutual information
-    # # mi_rmse, mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=False, metric='rmse', true_values=env.test_Y, oracle=oracle)
-
-    # # both, monotonic entropy
-    # both_mono_ent_rmse, both_mono_ent_kldiv = evaluate(agent, args, criterion='monotonic_entropy', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
-    
-
-    # # both, entropy
-    # agent2 = Agent(env, args)
-    # both_ent_rmse, both_ent_kldiv = evaluate(agent2, args, criterion='entropy', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
-    
-    
-    # # both, mutual information 
-    # # both_mi_rmse, both_mi_kldiv = evaluate(agent, args, criterion='mutual_information', camera_enabled=True, metric='rmse', true_values=env.test_Y, oracle=oracle)
-    
-
-    # ipdb.set_trace()
-
-    # plt.figure(0)
-    # x = np.arange(1,args.num_runs+1)*args.num_samples_per_batch
-    # plt.plot(x, ent_rmse, label='entropy')
-    # # plt.plot(x, mi_rmse, label='mutual_information')
-    # plt.plot(x, both_ent_rmse, label='both_entropy')
-    # # plt.plot(x, both_mi_rmse, label='both_mutual_information')
-    # plt.plot(x, both_mono_ent_rmse, label='both_monotonic_entropy')
-    # plt.plot(x, np.full(len(x), oracle['rmse']), linestyle='--', label='oracle')
-    # plt.legend()
-    # plt.show()
 
     # keys = [i for i in args_dict]
     # if not args.eval_only:

@@ -1,19 +1,15 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import gpytorch
-from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel, SpectralMixtureKernel
+from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel, SpectralMixtureKernel, ScaleKernel
 from gpytorch.means import ZeroMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.random_variables import GaussianRandomVariable
 
-import numpy as np
-import warnings
-import ipdb
 from utils import to_torch, to_numpy, process_variance
-from pprint import pprint
-import matplotlib.pyplot as plt
-from copy import deepcopy
+import ipdb
 
 
 class IdentityLatentFunction(nn.Module):
@@ -163,12 +159,7 @@ class GPR(object):
             elif i == self.max_iter - 1:
                 final_ll = -loss.item()
             losses.append(loss.item())
-
         print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
-        # print(self.optimizer.param_groups[0]['lr'])
-        # pr = [x for x in self.model.named_parameters()]
-        # print(dict(pr)['kernel_covar_module.log_lengthscale'])
-        # embed = self.get_embeddings(self._train_x)
         
     def cov_mat(self, x1, x2=None, var=None, add_likelihood_var=False):
         x1_ = to_torch(x1)
@@ -184,10 +175,8 @@ class GPR(object):
                 x2_ = self.model.latent_func(x2_)
                 cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
 
-            # robust to white noise kernel behavior
-            if (np.diag(cov)==1).all():
-                cov += process_variance(len(cov), var)
-
+            cov += process_variance(len(cov), var)
+            
             # for training data, add likelihood variance
             if add_likelihood_var:
                 cov += self.likelihood.log_noise.exp().item() * np.eye(len(cov))
@@ -228,7 +217,8 @@ class ExactGPModel(gpytorch.models.ExactGP):
         
         kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
         if kernel is None or kernel == 'rbf':
-            self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
+            self.kernel_covar_module = ScaleKernel(RBFKernel(ard_num_dims=ard_num_dims))
+            # self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel == 'matern':
             self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
         elif kernel == 'spectral_mixture':

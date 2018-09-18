@@ -57,15 +57,21 @@ def load_data(filename):
     return num_rows, num_cols, X[valid], Y[valid]
 
 
-def load_dataframe(filename, target_feature, extra_input_features=[]):
+def load_dataframe(filename, target_feature, extra_input_features=[], add_gene=True):
     df = pd.read_pickle(filename)
     X = np.vstack(df[['X']].values.squeeze())
     row_range = X[:, :2]
     num_rows = 15
     num_cols = int(X[:,1].max())
-    gene = X[:, 2:]
-    ph_vals = np.hstack([df[[f]].values for f in extra_input_features])
-    final_x = np.concatenate([row_range, ph_vals, gene], axis=1)
+    
+    final_x = row_range
+    if len(extra_input_features):
+        ph_vals = np.hstack([df[[f]].values for f in extra_input_features])
+        final_x = np.concatenate([row_range, ph_vals], axis=1)
+    if add_gene:
+        gene = X[:, 2:]
+        final_x = np.concatenate([final_x, gene], axis=1)        
+
     y = df[[target_feature]].values.squeeze()
     genotype = df[['category']].values.squeeze()
     return num_rows, num_cols, final_x, y, genotype
@@ -264,6 +270,10 @@ def normalize(data, col_max=None):
 #     return fig
 
 
+def compute_mae(true, pred):
+    return np.mean(np.abs(true - pred))
+
+
 def compute_rmse(true, pred):
     # return root mean square error betwee true values and predictions
     return np.linalg.norm(true.squeeze() - pred.squeeze()) / np.sqrt(len(true))
@@ -343,6 +353,27 @@ def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_va
     cov_aa = gp.cov_mat(x1=train_x, var=train_var, add_likelihood_var=True)
     cov_xx = gp.cov_mat(x1=test_x, var=test_var)
     cov_xa = gp.cov_mat(x1=test_x, x2=train_x)
+    # ipdb.set_trace()
+
+    mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
+    mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean
+    
+    if return_var:
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, np.diag(cov)
+         
+    if return_cov:
+        cov = cov_xx - np.dot(mat1, cov_xa.T)
+        return mu, cov
+    return mu 
+
+
+def posterior_distribution_from_cov(cov_mat, train_ind, train_y, test_ind, return_var=False, return_cov=False, alpha=1e-5):
+    train_y_mean = np.mean(train_y)
+
+    cov_aa = cov_mat[train_ind].T[train_ind].T + alpha * np.eye(len(train_ind))
+    cov_xx = cov_mat[test_ind].T[test_ind]
+    cov_xa = cov_mat[test_ind].T[train_ind].T
 
     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
     mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean
@@ -408,7 +439,12 @@ def draw_path(ax, path, head_width=None, head_length=None, linewidth=None, delta
                  linewidth=linewidth, color=arrow_color, alpha=1)
 
 
-def find_least_cost_path(paths_cost):
+def find_shortest_path(paths_cost):
     least_cost = min(paths_cost)
     indices = np.where(np.array(paths_cost)==least_cost)[0]
     return np.random.choice(indices)
+
+
+def find_equi_sample_path(paths_indices, idx):
+    num_samples = np.array([len(x) for x in paths_indices])
+    return np.random.choice(np.where(num_samples == num_samples[idx])[0])

@@ -2,51 +2,85 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, normalize, draw_path, manhattan_distance
+from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, draw_path, manhattan_distance
 from networkx import nx
 from copy import deepcopy
-from graph_utils import get_new_nodes_and_edges, edge_cost, get_heading, lower_bound_path_cost, find_merge_to_node
+from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node
 import matplotlib.pyplot as plt
-
+import time
           
+
 class FieldEnv(object):
-    def __init__(self, num_rows=15, num_cols=15, data_file=None, phenotype='plant_count', num_test=40):
+    def __init__(self, data_file=None, phenotype='plant_count', add_gene=True, extra_features=['leaf_fill', 'grvi'], num_test=40):
         super(FieldEnv, self).__init__()
 
         if data_file is None:
-            from utils import generate_gaussian_data, generate_mixed_data
-            self.num_rows, self.num_cols = num_rows, num_cols
-            self.X, self.Y = generate_gaussian_data(num_rows, num_cols)
-            # self.X, self.Y = generate_mixed_data(num_rows, num_cols)
-
+            raise NotImplementedError('Provided Filename for dataset')
+        
         else:
-            self.num_rows, self.num_cols, self.X, self.Y, self.category = load_dataframe(data_file, 
-                                                                          target_feature=phenotype,
-                                                                          extra_input_features=['grvi', 'leaf_fill'])
-            # NOTE: self.X should contain samples row-wise
+            # for intel dataset
+            if 'intel' in data_file:
+                import scipy.io
+                mat = scipy.io.loadmat(data_file)
+                x = mat['Xss']
+                y = mat['Fss'].squeeze()
+                self.num_rows = 15
+                self.num_cols = 17
+                n = len(x)
+                perm = np.random.permutation(n)
+                test_ind = perm[:num_test]
+                train_ind = perm[num_test:]
+                
+                self.X = x[train_ind]
+                self.Y = y[train_ind]
+                self.test_X = x[test_ind]
+                self.test_Y = y[test_ind]
 
-            # take out a category-wise test set scattered uniformly across genotypes
-            test_inds = []
-            for i in range(self.category.max()+1):
-                ind = np.random.choice(np.where(self.category==i)[0], num_test//4, replace=False)
-                test_inds.append(ind)
-            test_inds = np.hstack(test_inds)
-            train_inds = np.array(list(set(range(len(self.X))) - set(test_inds)))
-            
-            self.test_X = np.copy(self.X[test_inds])
-            self.test_Y = np.copy(self.Y[test_inds])
-            self.test_category = np.copy(self.category[test_inds])
-            
-            self.X = self.X[train_inds]
-            self.Y = self.Y[train_inds]
-            self.category = self.category[train_inds]
+                self.map = Map(self.num_rows, self.num_cols)
+                self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
+                self.gp_index_to_map_pose_array = np.full(len(self.X), None)
+                
+                x = self.X[:,:2]
+                indices = np.arange(len(x))
+                row = 0
+                for i in range(self.map.shape[0]):
+                    if i in self.map.row_pass_indices:
+                        continue
+                    # find all lying in 
+                    row_indices = indices[x[:,0]==row]
+                    for ind in row_indices:
+                        map_pose = (i, int(x[ind,1]))
+                        self.map_pose_to_gp_index_matrix[map_pose] = ind 
+                        self.gp_index_to_map_pose_array[ind] = map_pose
+                    row += 3
 
-        self.map = Map(self.num_rows, self.num_cols)
-        self._place_samples()
+            else: 
+                self.num_rows, self.num_cols, self.X, self.Y, self.category = load_dataframe(data_file, 
+                                                                              target_feature=phenotype,
+                                                                              extra_input_features=extra_features,
+                                                                              add_gene=add_gene)
+                # NOTE: self.X should contain samples row-wise
 
-        # self._normalize_dataset()
+                # take out a category-wise test set scattered uniformly across genotypes
+                test_inds = []
+                for i in range(self.category.max()+1):
+                    ind = np.random.choice(np.where(self.category==i)[0], num_test//4, replace=False)
+                    test_inds.append(ind)
+                test_inds = np.hstack(test_inds)
+                train_inds = np.array(list(set(range(len(self.X))) - set(test_inds)))
+                
+                self.test_X = np.copy(self.X[test_inds])
+                self.test_Y = np.copy(self.Y[test_inds])
+                self.test_category = np.copy(self.category[test_inds])
+                
+                self.X = self.X[train_inds]
+                self.Y = self.Y[train_inds]
+                self.category = self.category[train_inds]
+
+                self.map = Map(self.num_rows, self.num_cols)
+                self._place_samples()
+
         self._setup_graph()
-
         # for rendering
         self.fig = None
         self.ax = None
@@ -67,21 +101,14 @@ class FieldEnv(object):
                 self.map_pose_to_gp_index_matrix[map_pose] = ind 
                 self.gp_index_to_map_pose_array[ind] = map_pose
         
-    def vec_to_gp_mat(self, vec, default_value=0.0):
-        arr = np.full(self.map.shape, default_value)
-        for i,v in enumerate(vec):
-            arr[self.gp_index_to_map_pose_array[i]] = v
-        arr = np.delete(arr, self.map.row_pass_indices, axis=0)
-        arr = np.delete(arr, self.map.obstacle_cols, axis=1)
-        return arr
-
     def _normalize_dataset(self):
-        # NOTE: this is fine since we know in advance about the samples
         self.X = self.X.astype(float)
         self.X[:, :4] = zero_mean_unit_variance(self.X[:,:4])
         
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
+        # truncating negative values at 0
+        y[y<0] = 0
         return y
 
     def _setup_graph(self):
@@ -89,7 +116,7 @@ class FieldEnv(object):
         # add all intersections as nodes
         for r in self.map.row_pass_indices:
             for c in self.map.free_cols:
-                self.graph.add_node((r,c))
+                self.graph.add_node((r,c), pose=(c,self.map.shape[0]-r), new='False')
 
         delta_x = self.map.stack_len + 1
         # x-axis is row or the first element of the tuple
@@ -100,23 +127,68 @@ class FieldEnv(object):
             for dx, dy in dx_dy:
                 neighbor = (node[0] + dx, node[1] + dy)
                 if is_valid_cell(neighbor, self.map.shape):
-                    self.graph.add_edge(node, neighbor)
+                    indices = self.gp_indices_between(node, neighbor)
+                    self.graph.add_edge(node, neighbor, indices=indices)
 
         # store a backup
         self.backup_graph = deepcopy(self.graph)
 
     def _pre_search(self, start, waypoints):
         # add start and waypoints to the graph and remove redundant ones
-        new_nodes, new_edges, remove_edges = get_new_nodes_and_edges(self.graph, self.map, [start] + waypoints)
-        self.graph.add_nodes_from(new_nodes)
-        self.graph.add_edges_from(new_edges)
+        new_nodes, new_edges, new_edges_indices, remove_edges = self.get_new_nodes_and_edges([start] + waypoints)
+        
+        # add start and waypoint nodes to the graph
+        for node in new_nodes:
+            self.graph.add_node(node, pose=(node[1],self.map.shape[0]-node[0]), new='True')
+        
+        # add edges
+        for edge, indices in zip(new_edges, new_edges_indices):
+            self.graph.add_edge(edge[0], edge[1], indices=indices)    
+        
         # remove redundant edges (these edges have been replaced by edges between waypoints and map junctions)
-        self.graph.remove_edges_from(remove_edges)        
+        self.graph.remove_edges_from(remove_edges)  
+
+        # for drawing graph
+        # colors = []
+        # for n in self.graph:
+        #     if self.graph.node[n]['new'] == 'False':
+        #         colors.append('purple')
+        #     else:
+        #         colors.append('green')
+        # pose = nx.get_node_attributes(self.graph, 'pose')
+        # nx.draw(self.graph, pose, node_color=colors)
+        # plt.show()
+        
+    def get_new_nodes_and_edges(self, new_nodes):
+        # return nodes and edges to be added to the graph and the edges to be removed from the graph
+        new_nodes = [n for n in new_nodes if n not in self.graph.nodes()]
+        new_edges = []
+        new_edges_indices = []
+        remove_edges = []
+        for node in new_nodes:
+            down_junc = self.map.get_down_junction(node)
+            up_junc = self.map.get_up_junction(node)
+            down_node, up_node = get_down_and_up_nodes(node, new_nodes, down_junc, up_junc)
+            
+            down_indices = self.gp_indices_between(down_node, node)
+            if self.map_pose_to_gp_index_matrix[down_node] is not None:
+                down_indices.pop(0)
+            up_indices = self.gp_indices_between(up_node, node)
+            if self.map_pose_to_gp_index_matrix[up_node] is not None:
+                up_indices.pop(0)
+            
+            new_edges.append((down_node, node))
+            new_edges.append((node, up_node))
+            new_edges_indices.append(down_indices)
+            new_edges_indices.append(up_indices)
+
+            remove_edges.append((down_junc, up_junc))   
+        return new_nodes, new_edges, new_edges_indices, remove_edges
 
     def _post_search(self):
         self.graph = deepcopy(self.backup_graph)
 
-    def get_shortest_path_waypoints(self, start, heading, waypoints, least_cost, budget):
+    def get_shortest_path_waypoints(self, start, heading, waypoints, heuristic_cost=None, slack=0):
         self._pre_search(start, waypoints)
 
         # start_time = time.time()
@@ -130,9 +202,7 @@ class FieldEnv(object):
         open_list = [root]
         closed_list = []
 
-        # an upper bound on the shortest path length (always moving to the nearest waypoint)
-        # shortest_length = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
-        # shortest_length = self.bnb_shortest_path(start, heading, waypoints)
+        least_cost = self.get_heuristic_cost(start, heading, waypoints) if heuristic_cost is None else heuristic_cost
 
         # for efficieny, it will be beneficial if nodes are expanded in increasing order of gval
         idx = root
@@ -158,9 +228,8 @@ class FieldEnv(object):
                     new_visited[waypoints.index(new_pose)] = True
 
                 remaining_waypoints = [w for i,w in enumerate(waypoints) if not new_visited[i]]
-                # min_dist_to_go = lower_bound_path_cost(new_pose, remaining_waypoints)
-                min_dist_to_go = self.bnb_shortest_path(new_pose, new_heading, remaining_waypoints, least_cost)
-                if new_gval + min_dist_to_go > budget:
+                min_dist_to_go = self.get_heuristic_cost(new_pose, new_heading, remaining_waypoints, least_cost)
+                if new_gval + min_dist_to_go > least_cost + slack:
                     continue
                 
                 new_tree_node = dict(pose=new_pose, heading=new_heading, visited=new_visited, gval=new_gval)
@@ -187,7 +256,7 @@ class FieldEnv(object):
                 tree.add_edge(parent_idx, idx, weight=cost)
 
                 if sum(new_visited) == nw:
-                    # shortest_length = min(new_gval, shortest_length)
+                    least_cost = min(new_gval, least_cost)
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
@@ -199,32 +268,29 @@ class FieldEnv(object):
         # end_time = time.time()
         # print('Time {:4f}'.format(end_time-start_time))
 
-        # start_time = time.time()
+        start_time = time.time()
         all_paths = []
         all_paths_indices = []
         all_paths_cost = []
         for path_gen in all_paths_gen:
             for i, path in enumerate(path_gen):
+                path_cost = tree.node[path[-1]]['gval']
+                if path_cost > least_cost + slack:
+                    continue
+
+                all_paths_cost.append(path_cost)
                 locs = [tree.node[p]['pose'] for p in path]
+                # gp_indices contains only mobile sensing locations
+                gp_indices = [self.graph.get_edge_data(locs[t], locs[t+1])['indices'] for t in range(len(locs) - 1)]
+                # gp_indices = [self.gp_indices_between(locs[t],locs[t+1]) for t in range(len(path)-1)]
                 
-                # NOTE: this step is computationally expensive (determining indices on a path)
-                gp_indices = [self.gp_indices_between(locs[t],locs[t+1]) for t in range(len(path)-1)]
-                # need to add the last sampling location 
-                gp_indices = [item for sublist in gp_indices for item in sublist] + [self.map_pose_to_gp_index(locs[-1])]
+                gp_indices = [item for sublist in gp_indices for item in sublist]
                 all_paths_indices.append(gp_indices)
                 
-                path_cost = tree.node[path[-1]]['gval']
                 all_paths.append(locs)
-                all_paths_cost.append(path_cost)
-
-        # end_time = time.time()
-        # print('Time {:4f}'.format(end_time-start_time))
-
-        # visualize tree 
-        # import matplotlib.pyplot as plt
-        # pos = nx.get_node_attributes(tree, 'pose')
-        # nx.draw_networkx(tree, pos)
-        # plt.show()
+                
+        end_time = time.time()
+        print('Time {:4f}'.format(end_time-start_time))
 
         # print(count_merged)
         # print(count_skipped)
@@ -232,8 +298,79 @@ class FieldEnv(object):
         self._post_search()
         return all_paths, all_paths_indices, all_paths_cost
 
+    def get_heuristic_cost(self, start, heading, waypoints, least_cost_ub=None):
+        if len(waypoints) == 0:
+            return 0
+
+        least_cost = self.map.nearest_waypoint_path_cost(start, heading, waypoints) if least_cost_ub is None else least_cost_ub
+        
+        gval = 0
+        if start[0] not in self.map.row_pass_indices:
+            if heading not in [(1,0), (-1,0)]:
+                raise ValueError('Impossible setting encountered!!')
+        else:
+            # move to the first junction 
+            junc = self.map.get_junction(start, heading)
+            x = start[0]
+            covered = [False]*len(waypoints)
+            costs = [-1]*len(waypoints)
+            while x != junc[0]:
+                pose = (x,start[1])
+                if pose in waypoints:
+                    itr = waypoints.index(pose)
+                    covered[itr] = True
+                    costs[itr] = abs(start[0] - x)
+                x = x + heading[0]
+            waypoints = [w for i,w in enumerate(waypoints) if not covered[i]]
+            if len(waypoints) == 0:
+                return max(costs)
+            gval = manhattan_distance(start, junc)
+            start = junc
+        
+        nw = len(waypoints)
+        tree = nx.DiGraph()
+        # node attributes = {pos, gval, visited, heading}
+
+        root = 0
+        tree.add_node(root, pose=start, heading=heading, visited=[False]*nw, gval=gval)
+        open_list = [root]
+        closed_list = []
+        idx = root
+
+        while len(open_list) > 0:
+            parent_idx = open_list.pop(0)
+            parent_node = tree.node[parent_idx]
+            
+            # neighbors are all the waypoints which haven't been visited yet
+            for i in range(nw):
+                if parent_node['visited'][i]:
+                    continue
+
+                cost, final_heading = self.map.distance_between_nodes(parent_node['pose'], waypoints[i], parent_node['heading'])
+                if final_heading is None:
+                    ipdb.set_trace()
+                new_gval = parent_node['gval'] + cost
+                if new_gval > least_cost:
+                    continue
+
+                new_visited = np.copy(parent_node['visited'])
+                new_visited[i] = True
+                child_node = dict(pose=waypoints[i], heading=final_heading, visited=new_visited, gval=new_gval)
+                
+                idx += 1
+                tree.add_node(idx, **child_node)
+                tree.add_edge(parent_idx, idx, weight=cost)
+                if sum(new_visited) == nw:
+                    if new_gval < least_cost:
+                        least_cost = new_gval
+
+                    closed_list.append(idx)
+                else:
+                    open_list.append(idx)
+        return least_cost
+
     def gp_indices_on_path(self, path):
-        gp_indices = [self.gp_indices_between(path[t],path[t+1]) for t in range(len(path)-1)]
+        gp_indices = [self.graph.get_edge_data(path[t], path[t+1])['indices'] for t in range(len(path) - 1)]
         gp_indices = [item for sublist in gp_indices for item in sublist]        
         return gp_indices
 
@@ -269,83 +406,13 @@ class FieldEnv(object):
                 path.append((path[-1][0] + heading[0], path[-1][1] + heading[1]))
         return path
 
-    def bnb_shortest_path(self, start, heading, waypoints, least_cost=None):
-        # do branch and bound search to find shortest path
-        if len(waypoints) == 0:
-            return 0
-
-        if least_cost is None:
-            least_cost = self.map.nearest_waypoint_path_cost(start, heading, waypoints)
-        
-        gval = 0
-        if start[0] not in self.map.row_pass_indices and (heading == (1,0) or heading == (-1,0)):
-            junc = self.map.get_junction(start, heading)
-            x = start[0]
-            covered = [False]*len(waypoints)
-            costs = [-1]*len(waypoints)
-            while x != junc[0]:
-                pose = (x,start[1])
-                if pose in waypoints:
-                    itr = waypoints.index(pose)
-                    covered[itr] = True
-                    costs[itr] = abs(start[0] - x)
-                x = x + heading[0]
-            waypoints = [w for i,w in enumerate(waypoints) if not covered[i]]
-            if len(waypoints) == 0:
-                return max(costs)
-            gval = manhattan_distance(start, junc)
-            start = junc
-        
-
-        nw = len(waypoints)
-        tree = nx.DiGraph()
-        # node attributes = {pos, gval, visited, heading}
-
-        root = 0
-        tree.add_node(root, pose=start, heading=heading, visited=[False]*nw, gval=gval)
-        open_list = [root]
-        closed_list = []
-        idx = root
-
-        while len(open_list) > 0:
-            parent_idx = open_list.pop(0)
-            parent_node = tree.node[parent_idx]
-            
-            # neighbors are all waypoints which haven't been visited yet
-            for i in range(nw):
-                if parent_node['visited'][i]:
-                    continue
-                # print(parent_node['pose'], waypoints[i], parent_node['heading'])    
-                cost, final_heading = self.map.distance_between_nodes(parent_node['pose'], waypoints[i], parent_node['heading'])
-                if final_heading is None:
-                    ipdb.set_trace()
-                new_gval = parent_node['gval'] + cost
-                if new_gval > least_cost:
-                    continue
-
-                new_visited = np.copy(parent_node['visited'])
-                new_visited[i] = True
-                # print(waypoints[i], final_heading)
-                child_node = dict(pose=waypoints[i], heading=final_heading, visited=new_visited, gval=new_gval)
-                
-                idx += 1
-                tree.add_node(idx, **child_node)
-                tree.add_edge(parent_idx, idx, weight=cost)
-                if sum(new_visited) == nw:
-                    if new_gval < least_cost:
-                        least_cost = new_gval
-                    closed_list.append(idx)
-                else:
-                    open_list.append(idx)
-        return least_cost
-
     @property
     def shape(self):
         return self.num_rows, self.num_cols
 
     @property
     def num_samples(self):
-        return self.X.shape[0]
+        return len(self.X)
 
     def gp_indices_between(self, map_pose0, map_pose1):
         # returns list of gp indices between map_pose0 and map_pose1 "excluding" map_pose1 location
@@ -369,15 +436,35 @@ class FieldEnv(object):
         if self.fig is None:
             plt.ion()
             self.fig, self.ax = plt.subplots(1,1)
+            # clear all ticks
+            self.ax.get_xaxis().set_visible(False)
+            self.ax.get_yaxis().set_visible(False)
+            # plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
+            # # color all the sampling locations
+            # for i in range(plot.shape[0]):
+            #     for j in range(plot.shape[1]):
+            #         if self.map_pose_to_gp_index_matrix[i,j] is not None:
+            #             plot[i,j] = np.array([255,218,185])/255
+            # plot[0,0] = [0,0,1]
+            # plt.imshow(plot)
+            # plt.show()
+            # ipdb.set_trace()
         else:
             self.ax.cla()
 
-        self.ax.set_title('Environment')
+
+        # self.ax.set_title('Environment')
         plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
-        all_paths_color = [.75, .75, .5] 
-        all_sensor_locations_color = [.05, 1, .05]
+        for i in range(plot.shape[0]):
+                for j in range(plot.shape[1]):
+                    if self.map_pose_to_gp_index_matrix[i,j] is not None:
+                        plot[i,j] = np.array([255,218,185])/255
+        
+        all_paths_color = np.array([50,205,50])/255 
+        all_sensor_locations_color = np.array([0, 100, 0])/255
         # next_path_color = [.3, .3, .3]
-        next_sensor_locations_color = [.8, .1, .4]
+        next_sensor_locations_color = np.array([0, 100, 0])/255
+        # ipdb.set_trace()
 
         # highlight all camera samples locations 
         if len(all_paths) > 0:
@@ -396,37 +483,41 @@ class FieldEnv(object):
             plot[next_sensor_locations[:,0], next_sensor_locations[:,1], :] = next_sensor_locations_color
 
         waypoints = [x[::-1] for x in next_path_waypoints]
-        draw_path(self.ax, waypoints)
+        draw_path(self.ax, waypoints, head_width=0.25, head_length=.2, linewidth=None, delta=None, color='green')
 
         pose = all_paths[-1]
         plot[pose[0], pose[1], :] = [0, 0, 1]
         self.ax.imshow(plot)
 
+        ipdb.set_trace()
+
         plt.pause(1)
 
 
 if __name__ == '__main__':
-    env = FieldEnv(data_file='data/female_gene_data/all_mean.pkl')
-    # pose = (17,54)
-    # heading = (1,0)
-    # waypoints = [(1,22), (16,12), (11,38), (15,52), (3,68)]
+    env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')
     
-    pose = (3,38)
-    heading = (-1,0)
-    waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
+    # pose = (3,38)
+    # heading = (-1,0)
+    # waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
 
     # pose = (7,64)
     # heading = (-1,0)
     # waypoints = [(13,56), (8,8), (10,8), (7,38), (1,40)]
 
-    least_cost = env.bnb_shortest_path(pose, heading, waypoints)
-    ipdb.set_trace()
+    # pose = (1,6)
+    # heading = (-1,0)
+    # waypoints = [(5,6), (2,46), (7,46), (17,42)]
+
+    pose = (2,2)
+    heading = (1,0)
+    waypoints = [(1,4), (9,4)]
+
+    least_cost_ub = env.get_heuristic_cost(pose, heading, waypoints)
     
-    import time
     start = time.time()
-    budget = least_cost
-    paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, least_cost, budget)
+    slack = 0
+    paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, least_cost_ub, slack)
     end = time.time()
     print('Time consumed: {:4f}'.format(end-start))
-    ipdb.set_trace()
-    
+    ipdb.set_trace()   

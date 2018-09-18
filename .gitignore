@@ -1,0 +1,8 @@
+data/
+outputs/
+data_analysis/
+
+configure_data.py
+intel.py
+multi_task_models.py
+hadamard_mt.py

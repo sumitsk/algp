@@ -4,7 +4,7 @@ import numpy as np
 import ipdb
 
 
-def ground_truth(env, args):
+def baseline(env, args):
 	train_x = env.X
 	train_y = env.Y
 	train_var = np.full(len(env.X), args.sensor_std**2)

@@ -62,13 +62,16 @@ class Map(object):
         return np.array(ind)
    
     def distance_between_nodes(self, start, goal, heading):
+        if start == goal:
+            return 0, None
+
         # these cases should never occur
         if start[0] not in self.row_pass_indices:
             if heading not in [(1,0),(-1,0)]:
                 ipdb.set_trace()
 
-        if goal[0] in self.row_pass_indices:
-            ipdb.set_trace()
+        # if goal[0] in self.row_pass_indices:
+        #     ipdb.set_trace()
 
         # return distance between start and goal and final heading on goal
         # if start and goal are in the same column
@@ -165,48 +168,6 @@ class Map(object):
             heading = all_final_headings[idx]
             visited[idx] = True
         return total_cost
-
-    # def _render_path(self, ax):
-    #     # ax.set_cmap('hot')
-    #     plot = 1.0 - np.repeat(self.env.map.occupied[:, :, np.newaxis], 3, axis=2)
-    #     # highlight camera measurement
-    #     if self.path.shape[0] > 0:
-    #         plot[self.path[:, 0], self.path[:, 1], :] = [.75, .75, .5]
-    #     # highlight sensor measurement
-    #     if self.sensor_seq.shape[0] > 0:
-    #         plot[self.sensor_seq[:, 0], self.sensor_seq[:, 1]] = [.05, 1, .05]
-
-    #     plot[self.agent_map_pose[0], self.agent_map_pose[1], :] = [0, 0, 1]
-    #     ax.set_title('Environment')
-    #     ax.imshow(plot)
-
-    # def render(self, fig, ax, pred, var):
-    #     # self._render_path(ax[0, 0])
-
-    #     # render plots
-    #     axt, axp, axv = ax[1, 0], ax[1, 1], ax[0, 1]
-    #     axt.set_title('Ground Truth / Actual values')
-    #     imt = axt.imshow(self.env.full_Y, cmap='ocean', vmin=0, vmax=self.env.Y.max())
-    #     div = make_axes_locatable(axt)
-    #     caxt = div.new_horizontal(size='5%', pad=.05)
-    #     fig.add_axes(caxt)
-    #     fig.colorbar(imt, caxt, orientation='vertical')
-
-    #     axp.set_title('Predicted values')
-    #     res_pred = self.env.vec_to_gp_mat(pred)
-    #     imp = axp.imshow(res_pred, cmap='ocean', vmin=0, vmax=self.env.Y.max())
-    #     divm = make_axes_locatable(axp)
-    #     caxp = divm.new_horizontal(size='5%', pad=.05)
-    #     fig.add_axes(caxp)
-    #     fig.colorbar(imp, caxp, orientation='vertical')
-
-    #     axv.set_title('Variance')
-    #     res_var = self.env.vec_to_gp_mat(var)
-    #     imv = axv.imshow(res_var, cmap='hot')
-    #     # divv = make_axes_locatable(axv)
-    #     # caxv = divv.new_horizontal(size='5%', pad=.05)
-    #     # fig.add_axes(caxv)
-    #     # fig.colorbar(imv, caxv, orientation='vertical')
 
 
 if __name__ == '__main__':

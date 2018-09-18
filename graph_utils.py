@@ -24,21 +24,6 @@ def get_heading(node, previous_node):
         return (diff[0]//abs(diff[0]),0)
 
 
-def get_new_nodes_and_edges(graph, map, nodes):
-    # return nodes and edges to be added to the graph and the edges to be removed from the graph
-    new_nodes = [n for n in nodes if n not in graph.nodes()]
-    new_edges = []
-    remove_edges = []
-    for node in new_nodes:
-        down_junc = map.get_down_junction(node)
-        up_junc = map.get_up_junction(node)
-        down_node, up_node = get_down_and_up_nodes(node, new_nodes, down_junc, up_junc)
-        new_edges.append((down_node, node))
-        new_edges.append((node, up_node))
-        remove_edges.append((down_junc, up_junc))   
-    return new_nodes, new_edges, remove_edges
-
-
 def get_down_and_up_nodes(node, others, down_junction, up_junction):
     # find nodes just above and below the current node
     down_node, up_node = down_junction, up_junction
