@@ -9,14 +9,14 @@ import time
 
 
 class Agent(object):
-    def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=True, camera_std=None, sensor_std=None):
+    def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=True, mobile_std=None, static_std=None):
         super()
         self.env = env
         self.learn_likelihood_noise = learn_likelihood_noise
         self._init_model(args)
 
-        self.camera_std = args.camera_std if camera_std is None else camera_std
-        self.sensor_std = args.sensor_std if sensor_std is None else sensor_std
+        self.mobile_std = args.mobile_std if mobile_std is None else mobile_std
+        self.static_std = args.static_std if static_std is None else static_std
         self.num_samples_per_batch = args.num_samples_per_batch
         self.update_every = args.update_every
         
@@ -48,31 +48,31 @@ class Agent(object):
         torch.save(state, filename)
 
     def reset(self):
-        self.sensor_data = [[] for _ in range(self.env.num_samples)]
-        self.camera_data = [[] for _ in range(self.env.num_samples)]
+        self.static_data = [[] for _ in range(self.env.num_samples)]
+        self.mobile_data = [[] for _ in range(self.env.num_samples)]
         self.pose = (0, 0)
         self.heading = (1, 0)
         self.path = np.copy(self.pose).reshape(-1, 2)
-        self.sensor_locations = np.empty((0, 2))
+        self.static_locations = np.empty((0, 2))
         
     def _pre_train(self, num_samples):
         print('====================================================')
         print('--- Pretraining ---')
         ind = np.random.permutation(self.env.num_samples)[:num_samples]
-        self._add_samples(ind, source='sensor')
+        self._add_samples(ind, source='static')
         self.update_model()
         # if don't want to remember/condition on pre_train data points    
         # self.reset()    
         
-    def _add_samples(self, indices, source='sensor'):
-        std = self.sensor_std if source == 'sensor' else self.camera_std
+    def _add_samples(self, indices, source='static'):
+        std = self.static_std if source == 'static' else self.mobile_std
         y = self.env.collect_samples(indices, std)
         for i in range(len(indices)):
             idx = indices[i]
-            if source == 'sensor':
-                self.sensor_data[idx].append(y[i])
+            if source == 'static':
+                self.static_data[idx].append(y[i])
             else:
-                self.camera_data[idx].append(y[i])
+                self.mobile_data[idx].append(y[i])
 
     def update_model(self):
         indices, y, var = self.get_sampled_dataset()        
@@ -84,19 +84,19 @@ class Agent(object):
         all_var = []
         indices = []
         for i in range(self.env.num_samples):
-            if len(self.camera_data[i])>0 and len(self.sensor_data[i])>0:
-                yc = np.mean(self.camera_data[i])
-                ys = np.mean(self.sensor_data[i])
-                yeq = (self.camera_std**2 * ys + self.sensor_std**2 * yc) / (self.camera_std**2 + self.sensor_std**2)
-                var = 1 / (1/(self.sensor_std**2) + 1/(self.camera_std**2))
+            if len(self.mobile_data[i])>0 and len(self.static_data[i])>0:
+                yc = np.mean(self.mobile_data[i])
+                ys = np.mean(self.static_data[i])
+                yeq = (self.mobile_std**2 * ys + self.static_std**2 * yc) / (self.mobile_std**2 + self.static_std**2)
+                var = 1 / (1/(self.static_std**2) + 1/(self.mobile_std**2))
 
-            elif len(self.sensor_data[i])>0:
-                yeq = np.mean(self.sensor_data[i])
-                var = self.sensor_std**2
+            elif len(self.static_data[i])>0:
+                yeq = np.mean(self.static_data[i])
+                var = self.static_std**2
 
-            elif len(self.camera_data[i])>0:
-                yeq = np.mean(self.camera_data[i])
-                var = self.camera_std**2
+            elif len(self.mobile_data[i])>0:
+                yeq = np.mean(self.mobile_data[i])
+                var = self.mobile_std**2
 
             else:
                 continue
@@ -120,7 +120,7 @@ class Agent(object):
             self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', camera_enabled=False, update=False, slack=0, strategy='max_ent'):
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', mobile_enabled=False, update=False, slack=0, strategy='max_ent'):
         # this function selects k points greedily and then finds the path that maximises the total information gain 
         assert strategy in ['max_ent', 'shortest', 'equi_sample'], 'Unknown strategy!!'
         assert criterion in ['entropy', 'mutual_information'], 'Unknown criterion!!'
@@ -137,11 +137,11 @@ class Agent(object):
             # greedily select static samples
             new_gp_indices = self.greedy(self.num_samples_per_batch)  
             waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
-            next_sensor_locations = np.stack(waypoints)
-            self.sensor_locations = np.concatenate([self.sensor_locations, next_sensor_locations]).astype(int)
+            next_static_locations = np.stack(waypoints)
+            self.static_locations = np.concatenate([self.static_locations, next_static_locations]).astype(int)
             
-            # Gather data along path only when camera is enabled
-            if camera_enabled:          
+            # Gather data along path only when mobile is enabled
+            if mobile_enabled:          
                 print('------ Finding valid paths ---------')
                 print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
                 start = time.time()
@@ -174,7 +174,7 @@ class Agent(object):
                     least_cost_paths += 1
 
                 if render:
-                    self.env.render(paths_checkpoints[best_idx], self.path, next_sensor_locations, self.sensor_locations)
+                    self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
                 
                 # update agent statistics
                 self.path = np.concatenate([self.path, next_path[1:]], axis=0).astype(int)
@@ -182,9 +182,9 @@ class Agent(object):
                 self.heading = get_heading(self.path[-1], self.path[-2])
         
                 # add samples
-                self._add_samples(next_path_indices, source='camera')
+                self._add_samples(next_path_indices, source='mobile')
             
-            self._add_samples(new_gp_indices, source='sensor')
+            self._add_samples(new_gp_indices, source='static')
             
             # update hyperparameters of GP model
             if update and (i+1) % self.update_every == 0:
@@ -243,16 +243,16 @@ class Agent(object):
     def greedy(self, num_samples):
         # select most informative samples in a greedy manner
         n = self.env.num_samples
-        camera_sampled = np.array([False if len(x)==0 else True for x in self.camera_data])
-        camera_var = np.full(n, np.inf)
-        camera_var[camera_sampled] = self.camera_std**2
+        mobile_sampled = np.array([False if len(x)==0 else True for x in self.mobile_data])
+        mobile_var = np.full(n, np.inf)
+        mobile_var[mobile_sampled] = self.mobile_std**2
         
-        sensor_sampled = np.array([False if len(x)==0 else True for x in self.sensor_data])
-        sensor_var = np.full(n, np.inf)
-        sensor_var[sensor_sampled] = self.sensor_std**2
+        static_sampled = np.array([False if len(x)==0 else True for x in self.static_data])
+        static_var = np.full(n, np.inf)
+        static_var[static_sampled] = self.static_std**2
         
-        sampled = sensor_sampled | camera_sampled
-        var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
+        sampled = static_sampled | mobile_sampled
+        var = 1.0 / (1.0/static_var[sampled] + 1.0/mobile_var[sampled])
         cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
         ent_v = entropy_from_cov(cov_v, self.entropy_constant)
 
@@ -263,14 +263,14 @@ class Agent(object):
             cond = ent_v + sum(cumm_utilities)
 
             for i in range(n):
-                if sensor_sampled[i]:
+                if static_sampled[i]:
                     continue
 
                 # modify sampled (temporarily)
-                sensor_sampled[i] = True
-                sensor_var[i] = self.sensor_std**2
-                sampled = sensor_sampled | camera_sampled
-                var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
+                static_sampled[i] = True
+                static_var[i] = self.static_std**2
+                sampled = static_sampled | mobile_sampled
+                var = 1.0 / (1.0/static_var[sampled] + 1.0/mobile_var[sampled])
         
                 # a - set of all sampled locations 
                 cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
@@ -279,7 +279,7 @@ class Agent(object):
                     cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
                     ent_abar = entropy_from_cov(cov_abar)
                     
-                    precision = 1.0/sensor_var + 1.0/camera_var
+                    precision = 1.0/static_var + 1.0/mobile_var
                     precision[precision==0] = np.inf
                     var = 1.0 / precision
                     cov_all = self.cov_matrix + np.diag(var)
@@ -291,15 +291,15 @@ class Agent(object):
                 utilities[i] = ut
 
                 # reset sampled
-                sensor_sampled[i] = False
-                sensor_var[i] = np.inf
+                static_sampled[i] = False
+                static_var[i] = np.inf
 
             best_sample = np.argmax(utilities)
             cumm_utilities.append(utilities[best_sample])
             new_samples.append(best_sample)
             # update sampled
-            sensor_sampled[best_sample] = True
-            sensor_var[best_sample] = self.sensor_std**2
+            static_sampled[best_sample] = True
+            static_var[best_sample] = self.static_std**2
  
         return new_samples
 
@@ -311,24 +311,24 @@ class Agent(object):
             return 0
 
         n = self.env.num_samples
-        org_camera_sampled = np.array([False if len(x)==0 else True for x in self.camera_data])
+        org_mobile_sampled = np.array([False if len(x)==0 else True for x in self.mobile_data])
         
-        sensor_sampled = np.array([False if len(x)==0 else True for x in self.sensor_data])
-        sensor_sampled[static_indices] = True
-        sensor_var = np.full(n, np.inf)
-        sensor_var[sensor_sampled] = self.sensor_std**2
+        static_sampled = np.array([False if len(x)==0 else True for x in self.static_data])
+        static_sampled[static_indices] = True
+        static_var = np.full(n, np.inf)
+        static_var[static_sampled] = self.static_std**2
         
         all_ut = []
         for i in range(len(paths_mobile_indices)):
-            camera_sampled = np.copy(org_camera_sampled)
+            mobile_sampled = np.copy(org_mobile_sampled)
             mobile_indices = paths_mobile_indices[i]
-            camera_sampled[mobile_indices] = True
+            mobile_sampled[mobile_indices] = True
             
-            camera_var = np.full(n, np.inf)
-            camera_var[camera_sampled] = self.camera_std**2
+            mobile_var = np.full(n, np.inf)
+            mobile_var[mobile_sampled] = self.mobile_std**2
         
-            sampled = sensor_sampled | camera_sampled
-            var = 1.0 / (1.0/sensor_var[sampled] + 1.0/camera_var[sampled])
+            sampled = static_sampled | mobile_sampled
+            var = 1.0 / (1.0/static_var[sampled] + 1.0/mobile_var[sampled])
         
             # a - set of all sampled locations 
             cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
@@ -337,7 +337,7 @@ class Agent(object):
                 cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
                 ent_abar = entropy_from_cov(cov_abar)
                 
-                precision = 1.0/sensor_var + 1.0/camera_var
+                precision = 1.0/static_var + 1.0/mobile_var
                 precision[precision==0] = np.inf
                 var = 1.0 / precision
                 cov_all = self.cov_matrix + np.diag(var)

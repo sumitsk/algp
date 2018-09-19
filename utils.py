@@ -77,6 +77,27 @@ def load_dataframe(filename, target_feature, extra_input_features=[], add_gene=T
     return num_rows, num_cols, final_x, y, genotype
 
 
+def load_data_from_pickle(filename, target_feature, extra_input_features=[], max_range=None):
+    df = pd.read_pickle(filename)
+    x = df[['Row', 'Range']].values
+    y = df[[target_feature]].values.squeeze()
+
+    if len(extra_input_features):
+        ph_vals = np.hstack([df[[f]].values for f in extra_input_features])
+        x = np.concatenate([x, ph_vals], axis=1)
+
+    # truncate extra ranges from the dataset
+    num_rows = len(np.unique(x[:,0]))
+    num_ranges = len(np.unique(x[:,1]))
+    if max_range is not None:
+        ind = np.arange(len(x)).reshape(num_ranges, num_rows)[:max_range].flatten()
+        x = x[ind]
+        y = y[ind]
+    else:
+        max_range = num_ranges
+    return max_range, num_rows, x, y 
+
+
 def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum'):
     """
     :param num_rows: number of rows
@@ -349,11 +370,9 @@ def fit_and_eval(gp, train_x, train_y, test_x, test_y, disp=False):
 def posterior_distribution(gp, train_x, train_y, test_x, train_var=None, test_var=None, return_var=False, return_cov=False):
     train_y_mean = np.mean(train_y)
 
-    # robust to the behavior of white noise kernel
     cov_aa = gp.cov_mat(x1=train_x, var=train_var, add_likelihood_var=True)
     cov_xx = gp.cov_mat(x1=test_x, var=test_var)
     cov_xa = gp.cov_mat(x1=test_x, x2=train_x)
-    # ipdb.set_trace()
 
     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
     mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean

@@ -5,9 +5,7 @@ from env import FieldEnv
 from agent import Agent
 import ipdb
 from utils import compute_rmse, compute_mae
-from methods import baseline
 import numpy as np
-import torch
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -36,14 +34,14 @@ def compare_strategies():
 		ll_noise = True
 		master = Agent(env, args, learn_likelihood_noise=ll_noise)
 
-		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=kappa*args.sensor_std)
-		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=kappa*args.sensor_std)
-		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=kappa*args.sensor_std)
+		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
+		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
+		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
 	
 
-		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='shortest')
-		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='equi_sample')
+		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='shortest')
+		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='equi_sample')
 	
 		results1.append(res1['rmse'])
 		results2.append(res2['rmse'])
@@ -89,17 +87,17 @@ def max_ent_tests():
 		ll_noise = True
 		master = Agent(env, args, learn_likelihood_noise=ll_noise)
 
-		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=1*args.sensor_std)
-		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=2*args.sensor_std)
-		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=5*args.sensor_std)
-		agent4 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=10*args.sensor_std)
-		agent5 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, camera_std=20*args.sensor_std)
+		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=1*args.static_std)
+		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=2*args.static_std)
+		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=5*args.static_std)
+		agent4 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=10*args.static_std)
+		agent5 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=20*args.static_std)
 
-		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res4 = agent4.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res5 = agent5.run_ipp(num_runs=num_runs, criterion=criterion, camera_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res4 = agent4.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+		res5 = agent5.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
 
 		results1.append(res1['rmse'])
 		results2.append(res2['rmse'])
@@ -128,7 +126,6 @@ def max_ent_tests():
 	results5 = np.stack(results5)
 
 	x = np.stack([np.arange(1,num_runs+1) for _ in range(sims)])
-	# dct = {'x': x.flatten(), 'shortest': results1.flatten(), 'max_ent': results2.flatten(), 'equi_sample': results3.flatten()}
 	dct = {'x': x.flatten(), '1': results1.flatten(), '2': results2.flatten(), '5': results3.flatten(), '10': results4.flatten(), '20': results5.flatten()}
 	df = pd.DataFrame.from_dict(dct)
 	means, stds = get_mean_and_std(df)

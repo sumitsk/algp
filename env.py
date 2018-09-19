@@ -2,7 +2,7 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import zero_mean_unit_variance, is_valid_cell, load_dataframe, draw_path, manhattan_distance
+from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance
 from networkx import nx
 from copy import deepcopy
 from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node
@@ -11,7 +11,7 @@ import time
           
 
 class FieldEnv(object):
-    def __init__(self, data_file=None, phenotype='plant_count', add_gene=True, extra_features=['leaf_fill', 'grvi'], num_test=40):
+    def __init__(self, data_file=None, phenotype='plant_count', extra_features=['leaf_fill', 'grvi'], num_test=40):
         super(FieldEnv, self).__init__()
 
         if data_file is None:
@@ -46,7 +46,6 @@ class FieldEnv(object):
                 for i in range(self.map.shape[0]):
                     if i in self.map.row_pass_indices:
                         continue
-                    # find all lying in 
                     row_indices = indices[x[:,0]==row]
                     for ind in row_indices:
                         map_pose = (i, int(x[ind,1]))
@@ -55,29 +54,20 @@ class FieldEnv(object):
                     row += 3
 
             else: 
-                self.num_rows, self.num_cols, self.X, self.Y, self.category = load_dataframe(data_file, 
-                                                                              target_feature=phenotype,
-                                                                              extra_input_features=extra_features,
-                                                                              add_gene=add_gene)
-                # NOTE: self.X should contain samples row-wise
-
-                # take out a category-wise test set scattered uniformly across genotypes
-                test_inds = []
-                for i in range(self.category.max()+1):
-                    ind = np.random.choice(np.where(self.category==i)[0], num_test//4, replace=False)
-                    test_inds.append(ind)
-                test_inds = np.hstack(test_inds)
-                train_inds = np.array(list(set(range(len(self.X))) - set(test_inds)))
+                self.num_rows, self.num_cols, self.X, self.Y = load_data_from_pickle(data_file, target_feature=phenotype,
+                                                                                     extra_input_features=extra_features, max_range=25)
+                n = len(self.X)
+                perm = np.random.permutation(n)
+                test_ind = perm[:num_test]
+                train_ind = perm[num_test:]
                 
-                self.test_X = np.copy(self.X[test_inds])
-                self.test_Y = np.copy(self.Y[test_inds])
-                self.test_category = np.copy(self.category[test_inds])
+                self.test_X = np.copy(self.X[test_ind])
+                self.test_Y = np.copy(self.Y[test_ind])
                 
-                self.X = self.X[train_inds]
-                self.Y = self.Y[train_inds]
-                self.category = self.category[train_inds]
-
-                self.map = Map(self.num_rows, self.num_cols)
+                self.X = self.X[train_ind]
+                self.Y = self.Y[train_ind]
+                
+                self.map = Map(self.num_rows, self.num_cols, num_row_passes=4)
                 self._place_samples()
 
         self._setup_graph()
@@ -88,26 +78,27 @@ class FieldEnv(object):
     def _place_samples(self):
         self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
         self.gp_index_to_map_pose_array = np.full(len(self.X), None)
-        row = 0
+        row = 2
         x = self.X[:,:2]
         indices = np.arange(len(x))
-        for i in range(self.map.shape[0]):
-            if i in self.map.row_pass_indices:
+        for i in range(self.map.shape[1]):
+            if i%2 == 1:
                 continue
-            row += 2
             row_indices = indices[x[:,0]==row]
             for ind in row_indices:
-                map_pose = (i, int(2*x[ind,1] - 2))
+                t = x[ind, 1] + (x[ind, 1] -1) // self.map.stack_len
+                map_pose = (int(t), row-2)
                 self.map_pose_to_gp_index_matrix[map_pose] = ind 
                 self.gp_index_to_map_pose_array[ind] = map_pose
-        
+            row += 2
+            
     def _normalize_dataset(self):
         self.X = self.X.astype(float)
         self.X[:, :4] = zero_mean_unit_variance(self.X[:,:4])
         
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
-        # truncating negative values at 0
+        # truncating negative values to 0
         y[y<0] = 0
         return y
 
@@ -432,7 +423,7 @@ class FieldEnv(object):
         assert isinstance(map_pose, tuple), 'Map pose must be a tuple'
         return self.map_pose_to_gp_index_matrix[map_pose]
 
-    def render(self, next_path_waypoints, all_paths, next_sensor_locations, all_sensor_locations):
+    def render(self, next_path_waypoints, all_paths, next_static_locations, all_static_locations):
         if self.fig is None:
             plt.ion()
             self.fig, self.ax = plt.subplots(1,1)
@@ -461,26 +452,26 @@ class FieldEnv(object):
                         plot[i,j] = np.array([255,218,185])/255
         
         all_paths_color = np.array([50,205,50])/255 
-        all_sensor_locations_color = np.array([0, 100, 0])/255
+        all_static_locations_color = np.array([0, 100, 0])/255
         # next_path_color = [.3, .3, .3]
-        next_sensor_locations_color = np.array([0, 100, 0])/255
+        next_static_locations_color = np.array([0, 100, 0])/255
         # ipdb.set_trace()
 
-        # highlight all camera samples locations 
+        # highlight all mobile samples locations 
         if len(all_paths) > 0:
             plot[all_paths[:, 0], all_paths[:, 1], :] = all_paths_color
         
-        # highlight all sensor samples locations
-        if len(all_sensor_locations) > 0:
-            plot[all_sensor_locations[:, 0], all_sensor_locations[:, 1], :] = all_sensor_locations_color
+        # highlight all static samples locations
+        if len(all_static_locations) > 0:
+            plot[all_static_locations[:, 0], all_static_locations[:, 1], :] = all_static_locations_color
 
-        # highlight next camera samples
+        # highlight next mobile samples
         # if len(next_path) > 0:
         #     plot[next_path[:, 0], next_path[:, 1], :] = next_path_color
 
-        # highlight next sensor samples
-        if len(next_sensor_locations) > 0:
-            plot[next_sensor_locations[:,0], next_sensor_locations[:,1], :] = next_sensor_locations_color
+        # highlight next static samples
+        if len(next_static_locations) > 0:
+            plot[next_static_locations[:,0], next_static_locations[:,1], :] = next_static_locations_color
 
         waypoints = [x[::-1] for x in next_path_waypoints]
         draw_path(self.ax, waypoints, head_width=0.25, head_length=.2, linewidth=None, delta=None, color='green')

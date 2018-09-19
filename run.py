@@ -27,8 +27,8 @@ plt.rcParams.update({'font.size': 22})
     
 
 
-def evaluate(agent, args, criterion, camera_enabled, metric, true_values, oracle):
-    results = agent.run_ipp(num_runs=args.num_runs, criterion=criterion, camera_enabled=camera_enabled)
+def evaluate(agent, args, criterion, mobile_enabled, metric, true_values, oracle):
+    results = agent.run_ipp(num_runs=args.num_runs, criterion=criterion, mobile_enabled=mobile_enabled)
     kldiv = normal_dist_kldiv(results[-1]['mean'], results[-1]['covariance'], oracle['mean'], oracle['covariance'])
     means = [x['mean'] for x in results]
     err = compute_metric(true_values, means, metric=metric)
@@ -61,24 +61,24 @@ def static_vs_both(args):
     ll_noise = True
     agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
     all_res = []
-    all_res_camera = []
+    all_res_mobile = []
 
     sims = 3
     for _ in range(sims):
         env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
         agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res1 = agent1.run_ipp(num_runs=2*args.num_runs, criterion='monotonic_entropy', camera_enabled=False, render=False)
+        res1 = agent1.run_ipp(num_runs=2*args.num_runs, criterion='monotonic_entropy', mobile_enabled=False, render=False)
         all_res.append([x['rmse'] for x in res1])
 
         agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', camera_enabled=True, render=False)
-        all_res_camera.append([x['rmse'] for x in res2])
+        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', mobile_enabled=True, render=False)
+        all_res_mobile.append([x['rmse'] for x in res2])
 
     r1 = np.stack(all_res)
     x1 = np.arange(1, 2*args.num_runs+1)*args.num_samples_per_batch
     x1all = np.stack([x1 for _ in range(sims)]).flatten()
 
-    rc = np.stack(all_res_camera)
+    rc = np.stack(all_res_mobile)
     xc = np.arange(1, args.num_runs+1)*args.num_samples_per_batch
     xcall = np.stack([xc for _ in range(sims)]).flatten()
     dict1 = {'Static samples': x1all, 'RMSE': r1.flatten()}
@@ -103,7 +103,7 @@ if __name__ == '__main__':
     ll_noise = True
     agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)    
 
-    results = agent_common.run_ipp(camera_enabled=True, update=False)
+    results = agent_common.run_ipp(mobile_enabled=True, update=False)
     ipdb.set_trace()
 
     # Save arguments as json file
