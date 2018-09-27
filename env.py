@@ -5,7 +5,7 @@ from map import Map
 from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance
 from networkx import nx
 from copy import deepcopy
-from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node
+from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node, lower_bound_path_cost
 import matplotlib.pyplot as plt
 import time
           
@@ -213,13 +213,14 @@ class FieldEnv(object):
                     continue
                 new_gval = gval + cost
 
-                new_heading = get_heading(new_pose, pose)
+                new_heading = get_heading(pose, new_pose)
                 new_visited = deepcopy(tree_node['visited'])
                 if new_pose in waypoints:
                     new_visited[waypoints.index(new_pose)] = True
 
                 remaining_waypoints = [w for i,w in enumerate(waypoints) if not new_visited[i]]
-                min_dist_to_go = self.get_heuristic_cost(new_pose, new_heading, remaining_waypoints, least_cost)
+                # min_dist_to_go = self.get_heuristic_cost(new_pose, new_heading, remaining_waypoints, least_cost)
+                min_dist_to_go = lower_bound_path_cost(new_pose, remaining_waypoints)
                 if new_gval + min_dist_to_go > least_cost + slack:
                     continue
                 
@@ -338,8 +339,6 @@ class FieldEnv(object):
                     continue
 
                 cost, final_heading = self.map.distance_between_nodes(parent_node['pose'], waypoints[i], parent_node['heading'])
-                if final_heading is None:
-                    ipdb.set_trace()
                 new_gval = parent_node['gval'] + cost
                 if new_gval > least_cost:
                     continue
@@ -352,12 +351,14 @@ class FieldEnv(object):
                 tree.add_node(idx, **child_node)
                 tree.add_edge(parent_idx, idx, weight=cost)
                 if sum(new_visited) == nw:
-                    if new_gval < least_cost:
+                    if new_gval <= least_cost:
                         least_cost = new_gval
+                        best_idx = idx
 
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
+        # ipdb.set_trace()
         return least_cost
 
     def gp_indices_on_path(self, path):
@@ -392,7 +393,7 @@ class FieldEnv(object):
         # consecutive checkpoints are always aligned along either x-axis or y-axis
         path = [checkpoints[0]]
         for i in range(len(checkpoints)-1):
-            heading = get_heading(checkpoints[i+1], path[-1])
+            heading = get_heading(path[-1], checkpoints[i+1])
             while path[-1]!=checkpoints[i+1]:
                 path.append((path[-1][0] + heading[0], path[-1][1] + heading[1]))
         return path
@@ -451,8 +452,8 @@ class FieldEnv(object):
                     if self.map_pose_to_gp_index_matrix[i,j] is not None:
                         plot[i,j] = np.array([255,218,185])/255
         
-        all_paths_color = np.array([50,205,50])/255 
-        all_static_locations_color = np.array([0, 100, 0])/255
+        all_paths_color = np.array([244,164,96])/255
+        all_static_locations_color = np.array([127, 255, 0])/255
         # next_path_color = [.3, .3, .3]
         next_static_locations_color = np.array([0, 100, 0])/255
         # ipdb.set_trace()
@@ -474,19 +475,18 @@ class FieldEnv(object):
             plot[next_static_locations[:,0], next_static_locations[:,1], :] = next_static_locations_color
 
         waypoints = [x[::-1] for x in next_path_waypoints]
-        draw_path(self.ax, waypoints, head_width=0.25, head_length=.2, linewidth=None, delta=None, color='green')
+        draw_path(self.ax, waypoints, head_width=0.25, head_length=.2, linewidth=3.0, delta=None, color='green')
 
         pose = all_paths[-1]
         plot[pose[0], pose[1], :] = [0, 0, 1]
         self.ax.imshow(plot)
-
-        ipdb.set_trace()
-
         plt.pause(1)
 
 
 if __name__ == '__main__':
-    env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')
+    # env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')
+    
+    env = FieldEnv(data_file='data/july_data.pkl')
     
     # pose = (3,38)
     # heading = (-1,0)
@@ -500,9 +500,13 @@ if __name__ == '__main__':
     # heading = (-1,0)
     # waypoints = [(5,6), (2,46), (7,46), (17,42)]
 
-    pose = (2,2)
+    # pose = (2,2)
+    # heading = (1,0)
+    # waypoints = [(1,4), (9,4)]
+
+    pose = (26,22)
     heading = (1,0)
-    waypoints = [(1,4), (9,4)]
+    waypoints = [(28,28), (1,28), (29,2), (28,22)]
 
     least_cost_ub = env.get_heuristic_cost(pose, heading, waypoints)
     

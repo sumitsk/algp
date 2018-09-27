@@ -5,15 +5,15 @@ from utils import manhattan_distance
 
 def edge_cost(node, heading, next_node):
     # heading must be one from {(0,1), (0,-1), (1,0), (-1,0)}
-    next_heading = get_heading(next_node, node)
+    next_heading = get_heading(node, next_node)
     if opposite_headings(heading, next_heading):
         return np.inf
     return manhattan_distance(node, next_node)
 
 
-def get_heading(node, previous_node):
-    # return heading when robot moves from previous_node to node
-    diff = (node[0]-previous_node[0], node[1]-previous_node[1])
+def get_heading(node, next_node):
+    # return heading when robot moves from_node to next_node
+    diff = (next_node[0]-node[0], next_node[1]-node[1])
     # return None if both nodes overlap
     if diff == (0,0):
         return None
@@ -90,8 +90,8 @@ def opposite_headings(h0, h1):
 #             paths_costs = []
 #             paths_final_heading = []
 #             for path in path_gen:
-#                 initial_heading = get_heading(path[1], path[0])
-#                 final_heading = get_heading(path[-1], path[-2])
+#                 initial_heading = get_heading(path[0], path[1])
+#                 final_heading = get_heading(path[-2], path[-1])
 #                 cost = path_cost(path)
 #                 # if initial heading is opposite of the current heading, then add extra cost
 #                 if opposite_headings(initial_heading, heading):

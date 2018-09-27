@@ -15,8 +15,8 @@ class Agent(object):
         self.learn_likelihood_noise = learn_likelihood_noise
         self._init_model(args)
 
-        self.mobile_std = args.mobile_std if mobile_std is None else mobile_std
         self.static_std = args.static_std if static_std is None else static_std
+        self.mobile_std = 5*self.static_std if mobile_std is None else mobile_std
         self.num_samples_per_batch = args.num_samples_per_batch
         self.update_every = args.update_every
         
@@ -179,7 +179,7 @@ class Agent(object):
                 # update agent statistics
                 self.path = np.concatenate([self.path, next_path[1:]], axis=0).astype(int)
                 self.pose = tuple(self.path[-1])
-                self.heading = get_heading(self.path[-1], self.path[-2])
+                self.heading = get_heading(self.path[-2], self.path[-1])
         
                 # add samples
                 self._add_samples(next_path_indices, source='mobile')

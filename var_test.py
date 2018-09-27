@@ -3,164 +3,159 @@
 from arguments import get_args
 from env import FieldEnv
 from agent import Agent
-import ipdb
 from utils import compute_rmse, compute_mae
+from plots import get_mean_and_std
+
+import ipdb
+import os
+import json
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from plots import get_mean_and_std
+plt.rcParams.update({'font.size': 22})
+
 # np.random.seed(0)
 # torch.manual_seed(0)
 
 
 def compare_strategies():
-	args = get_args()
+    args = get_args()
+    title = {'plant_width': 'Plant Width', 'plant_count': 'Crop Density', 'plant_height': 'Plant Height'}
+    strategies = ['shortest', 'max_ent', 'equi_sample']
+    results = [[] for _ in range(len(strategies))]
+    
+    sims = args.num_sims
+    update = args.update
+    criterion = args.criterion
+    num_runs = args.num_runs
+    slack = args.slack
+    kappa = 5
+    agents = []
+    for i in range(sims):
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+        ll_noise = True
+        master = Agent(env, args, learn_likelihood_noise=ll_noise)
 
-	results1 = []
-	results2 = []
-	results3 = []
-	
-	update=False
-	criterion='entropy'
-	num_runs = 8
-	slack = 0
+        for t in range(len(strategies)):
+            agent = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
+            res = agent.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy=strategies[t])
+            results.append(res['rmse'])
+            agents.append(agent)
 
-	sims = 5
-	kappa = 5
-	for i in range(sims):
-		env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    results = [np.stack(x) for x in results]
+    x = np.stack([np.arange(1,num_runs+1) for _ in range(sims)])
+    dct = {'x': x.flatten()}
+    for st, res in zip(strategies, results):
+        dct[st] = res.flatten()
+    df = pd.DataFrame.from_dict(dct)
+    
+    ci = 25
+    fig, ax = plt.subplot(1,1)
+    for st in strategies:
+        ax = sns.lineplot(x='x', y=st, data=df, ax=ax, ci=ci, label=st)
+    plt.xticks(np.arange(1,num_runs+1))
+    manager = plt.get_current_fig_manager()
+    manager.resize(*manager.window.maxsize())
+    plt.title(title[args.phenotype])
+    plt.xlabel('Number of batches')
+    plt.ylabel('Test RMSE')
+    plt.legend()
+    plt.show()
+    # Save full size figure manually
+    ipdb.set_trace()
 
-		ll_noise = True
-		master = Agent(env, args, learn_likelihood_noise=ll_noise)
+    if not args.eval_only:
+        # save plot
+        # plt.savefig(os.path.join(args.save_dir, args.phenotype+'.png'))
+        
+        # save results dataframe
+        df.to_pickle(os.path.join(args.save_dir, args.phenotype+'.pkl'))
 
-		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
-		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
-		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappa*args.static_std)
-	
-
-		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='shortest')
-		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='equi_sample')
-	
-		results1.append(res1['rmse'])
-		results2.append(res2['rmse'])
-		results3.append(res3['rmse'])
-		
-	results1 = np.stack(results1)
-	results2 = np.stack(results2)
-	results3 = np.stack(results3)
-	
-	x = np.stack([np.arange(1,num_runs+1) for _ in range(sims)])
-	dct = {'x': x.flatten(), 'shortest': results1.flatten(), 'max_ent': results2.flatten(), 'equi_sample': results3.flatten()}
-	df = pd.DataFrame.from_dict(dct)
-	
-	ci = 50
-	ax = sns.lineplot(x='x', y='shortest', data=df, ci=ci, label='shortest')
-	ax = sns.lineplot(x='x', y='max_ent', data=df, ax=ax, ci=ci, label='max_ent')
-	ax = sns.lineplot(x='x', y='equi_sample', data=df, ax=ax, ci=ci, label='equi_sample')
-	ipdb.set_trace()
-	plt.xlabel('Number of batches')
-	plt.ylabel('Test RMSE')
-	plt.show()
-
+        with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
+            json.dump(vars(args), f, indent=True)
+    ipdb.set_trace()
 
 def max_ent_tests():
-	args = get_args()
+    args = get_args()
+    title = {'plant_width': 'Plant Width', 'plant_count': 'Crop Density', 'plant_height': 'Plant Height'}
 
-	sims = 10
+    sims = args.num_sims
+    update = args.update
+    criterion = args.criterion
+    num_runs = args.num_runs
+    slack = args.slack
+    kappas = [1,2,5,10]
+    results = [[] for _ in range(len(kappas))]
 
-	results1 = []
-	results2 = []
-	results3 = []
-	results4 = []
-	results5 = []
+    for i in range(sims):
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+        ll_noise = True
+        master = Agent(env, args, learn_likelihood_noise=ll_noise)
 
-	update=False
-	criterion='entropy'
-	num_runs = 10
-	slack = 0
+        agents = []
+        for t in range(len(kappas)):
+            agent = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=kappas[t]*args.static_std)
+            res = agent.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
+            results[t].append(res['rmse'])
+            agents.append(agent)
 
-	for i in range(sims):
-		env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    results = [np.stack(x) for x in results]
+    x = np.stack([np.arange(1,num_runs+1) for _ in range(sims)])
+    dct = {'x': x.flatten()}
+    for k,res in zip(kappas, results):
+        dct[str(k)] = res.flatten()
 
-		ll_noise = True
-		master = Agent(env, args, learn_likelihood_noise=ll_noise)
+    df = pd.DataFrame.from_dict(dct)
+    means, stds = get_mean_and_std(df, kappas=kappas)
+    
+    ci = 25
+    fig, ax = plt.subplots(1,1)
+    for k in kappas:
+        ax = sns.lineplot(x='x', y=str(k), data=df, ax=ax, ci=ci, label='k = ' + str(k))
 
-		agent1 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=1*args.static_std)
-		agent2 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=2*args.static_std)
-		agent3 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=5*args.static_std)
-		agent4 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=10*args.static_std)
-		agent5 = Agent(env, args, learn_likelihood_noise=ll_noise, parent_agent=master, mobile_std=20*args.static_std)
+    manager = plt.get_current_fig_manager()
+    manager.resize(*manager.window.maxsize())
+    plt.title(title[args.phenotype])
+    plt.xlabel('Number of batches')
+    plt.ylabel('Test RMSE')
+    plt.xticks(np.arange(1,args.num_runs+1))
+    plt.legend()
+    plt.show()
+    # Save figure manually
+    ipdb.set_trace()
+    
+    if not args.eval_only:
+        # save plot
+        # fig.savefig(os.path.join(args.save_dir, args.phenotype+'.png'), dpi=600)
+        
+        # save results dataframe
+        df.to_pickle(os.path.join(args.save_dir, args.phenotype+'.pkl'))
 
-		res1 = agent1.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res2 = agent2.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res3 = agent3.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res4 = agent4.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-		res5 = agent5.run_ipp(num_runs=num_runs, criterion=criterion, mobile_enabled=True, update=update, slack=slack, strategy='max_ent')
-
-		results1.append(res1['rmse'])
-		results2.append(res2['rmse'])
-		results3.append(res3['rmse'])
-		results4.append(res4['rmse'])
-		results5.append(res5['rmse'])
-
-		# b_res = baseline(env, args)
-		# rel_rmse1 = compute_rmse(b_res['mean'], res1['mean'])
-		# rel_rmse2 = compute_rmse(b_res['mean'], res2['mean'])
-		# rel_rmse3 = compute_rmse(b_res['mean'], res3['mean'])
-		# rel_rmse4 = compute_rmse(b_res['mean'], res4['mean'])
-		# mu1, cov1 = agent1.predict_test()
-		# mu2, cov2 = agent2.predict_test()
-		# mu3, cov3 = agent3.predict_test()
-		# mu4, cov4 = agent4.predict_test()
-		# kl_div1 = normal_dist_kldiv(b_res['mean'], b_res['covariance'], mu1, cov1)
-		# kl_div2 = normal_dist_kldiv(b_res['mean'], b_res['covariance'], mu2, cov2)
-		# kl_div3 = normal_dist_kldiv(b_res['mean'], b_res['covariance'], mu3, cov3)
-		# kl_div4 = normal_dist_kldiv(b_res['mean'], b_res['covariance'], mu4, cov4)
-
-	results1 = np.stack(results1)
-	results2 = np.stack(results2)
-	results3 = np.stack(results3)
-	results4 = np.stack(results4)
-	results5 = np.stack(results5)
-
-	x = np.stack([np.arange(1,num_runs+1) for _ in range(sims)])
-	dct = {'x': x.flatten(), '1': results1.flatten(), '2': results2.flatten(), '5': results3.flatten(), '10': results4.flatten(), '20': results5.flatten()}
-	df = pd.DataFrame.from_dict(dct)
-	means, stds = get_mean_and_std(df)
-	ipdb.set_trace()
-	ci = 75
-	ax = sns.lineplot(x='x', y='1', data=df, ci=ci)
-	ax = sns.lineplot(x='x', y='2', data=df, ax=ax, ci=ci)
-	ax = sns.lineplot(x='x', y='5', data=df, ax=ax, ci=ci)
-	ax = sns.lineplot(x='x', y='10', data=df, ax=ax, ci=ci)
-	ax = sns.lineplot(x='x', y='20', data=df, ax=ax, ci=ci)
-	ipdb.set_trace()
-	plt.xlabel('Number of batches')
-	plt.ylabel('Test RMSE')
-	plt.show()
-
+        with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
+            json.dump(vars(args), f, indent=True)
+    ipdb.set_trace()
+    
 
 def oracle():
-	args = get_args()
-	sims = 10
-	rmses = []
-	maes = []
-	for i in range(sims):
-		env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    args = get_args()
+    sims = 10
+    rmses = []
+    maes = []
+    for i in range(sims):
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
 
-		ll_noise = True
-		master = Agent(env, args, learn_likelihood_noise=ll_noise)
-		mu, cov = master.predict_test()
-		rms = compute_rmse(env.test_Y, mu)
-		mae = compute_mae(env.test_Y, mu)
-		rmses.append(rms)
-		maes.append(mae)
-	mean, std = np.mean(rmses), np.std(rmses)
-	ipdb.set_trace()
+        ll_noise = True
+        master = Agent(env, args, learn_likelihood_noise=ll_noise)
+        mu, cov = master.predict_test()
+        rms = compute_rmse(env.test_Y, mu)
+        mae = compute_mae(env.test_Y, mu)
+        rmses.append(rms)
+        maes.append(mae)
+    mean, std = np.mean(rmses), np.std(rmses)
+    ipdb.set_trace()
 
 if __name__ == '__main__':
-	# compare_strategies()
-	# max_ent_tests()
-	oracle()
+    # compare_strategies()
+    max_ent_tests()
+    # oracle()

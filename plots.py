@@ -9,7 +9,7 @@ plt.rcParams.update({'font.size': 22})
 def get_mean_and_std(df, idx=10, kappas=None):
 	ind = df.index[df['x'] == idx].tolist()
 	temp = df.iloc[ind]
-	kappas = ['1', '2', '5', '10', '20'] if kappas is None else kappas
+	kappas = ['1', '2', '5', '10', '20'] if kappas is None else [str(k) for k in kappas]
 	means = []
 	stds = []
 	for k in kappas:

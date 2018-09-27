@@ -102,9 +102,9 @@ if __name__ == '__main__':
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
     ll_noise = True
     agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)    
+    # ipdb.set_trace()
 
-    results = agent_common.run_ipp(mobile_enabled=True, update=False)
-    ipdb.set_trace()
+    results = agent_common.run_ipp(mobile_enabled=True, update=False, render=True)
 
     # Save arguments as json file
     # if not args.eval_only:

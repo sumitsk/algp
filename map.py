@@ -1,10 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt 
-import ipdb
 from utils import manhattan_distance
 from graph_utils import get_heading, opposite_headings
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-import seaborn as sns
+import ipdb
 
 
 class Map(object):
@@ -28,10 +25,6 @@ class Map(object):
         # 1 if obstacle 0 otherwise
         self.occupied = self._set_occupancy_grid()
 
-        # all poses (x,y) in the map
-        # x, y = np.meshgrid(np.arange(self._shape[1]), np.arange(self._shape[0]))
-        # self.all_poses = np.vstack([y.flatten(), x.flatten()]).T
-
     @property
     def shape(self):
         return self._shape
@@ -39,7 +32,6 @@ class Map(object):
     def _set_occupancy_grid(self):
         # returns the occupancy grid of the map
         grid = np.full(self._shape, False)
-        nr, nc = self._shape
         grid[:, self.obstacle_cols] = True
         grid[self.row_pass_indices, :] = False
         return grid
@@ -62,65 +54,119 @@ class Map(object):
         return np.array(ind)
    
     def distance_between_nodes(self, start, goal, heading):
+        # return distance between start and goal and final heading on reaching goal
         if start == goal:
-            return 0, None
+            return 0, heading
 
         # these cases should never occur
-        if start[0] not in self.row_pass_indices:
-            if heading not in [(1,0),(-1,0)]:
-                ipdb.set_trace()
+        if start[0] not in self.row_pass_indices and heading not in [(1,0),(-1,0)]:
+            raise NotImplementedError('Starting location has infeasible heading')
+        if goal[0] in self.row_pass_indices:
+            raise NotImplementedError('Goal location is a junction')
 
-        # if goal[0] in self.row_pass_indices:
-        #     ipdb.set_trace()
-
-        # return distance between start and goal and final heading on goal
         # if start and goal are in the same column
         if start[1] == goal[1]:
-            h = get_heading(goal, start)
-            opposite = opposite_headings(heading, h)
-            # if headings align, then just move to the goal
-            if not opposite:
-                return manhattan_distance(start, goal), get_heading(goal, start)
+            final_heading = get_heading(start, goal)
+            
+            # if headings align, move to the goal directly
+            if not opposite_headings(heading, final_heading):
+                return manhattan_distance(start, goal), final_heading
+            
             # if not, move to the junction, then move to the adjacent column (and come back later) and proceed to the goal
             else:
                 sj = self.get_junction(start, heading)    
                 gj = self.get_junction(goal, heading)
 
-                # start and goal in different blocks
+                # start and goal are in different blocks
                 if sj!=gj:
                     total_dist = manhattan_distance(start, sj) + 2*2 + manhattan_distance(sj, goal)
                     return total_dist, (-heading[0], 0)
-                # start and goal in same block, move to the opposite junction first and then straight to goal
+                
+                # start and goal are in the same block, need to come back in this block 
                 else:
                     node = self.get_junction(goal, (-heading[0], 0))
                     total_dist = manhattan_distance(start, sj) + 2*2 + manhattan_distance(sj, node) + manhattan_distance(node, goal)
                     return total_dist, heading
 
         # start and goal are in different columns
-        # move to the junction and then proceed to the goal
         else:
+            # move to the junction and then proceed to the goal
             if heading in [(1,0), (-1,0)]:
                 node = self.get_junction(start, heading)
                 total_dist = manhattan_distance(start, node) + manhattan_distance(node, goal)
-                # shift to the column which has the goal and compute new heading
-                final_heading = get_heading(goal, (node[0], goal[1]))
+                # shift to the goal column to compute final heading
+                final_heading = get_heading((node[0], goal[1]), goal)
                 final_heading = heading if final_heading is None else final_heading
                 return total_dist, final_heading
+
+            # start location is a junction and heading is either east or west 
             else:
-                up_node = self.get_up_junction(goal)
-                down_node = self.get_down_junction(goal)
-                # go to down node if up node lies in the same row as start
-                if start[1] == up_node[1]:
-                    total_dist = manhattan_distance(start, down_node) + manhattan_distance(down_node, goal)
-                    final_heading = (-1,0)
-                # go to up node if down node lies in the same row as start
-                elif start[1] == down_node[1]:
-                    total_dist = manhattan_distance(start, up_node) + manhattan_distance(up_node, goal)
-                    final_heading = (1,0)
-                else:
+                # if heading points towards the goal direction, just move there 
+                if (goal[1] >= start[1] and heading[1] > 0) or (goal[1] <= start[1] and heading[1] < 0):
                     total_dist = manhattan_distance(start, goal)
-                    final_heading = get_heading(goal, (start[0], goal[1]))
-                return total_dist, final_heading
+                    # shift to the goal column to compute final heading
+                    final_heading = get_heading((start[0], goal[1]), goal)
+                    return total_dist, final_heading
+
+                # if heading points in the opposite direction of goal
+                else:
+                    up_node = self.get_up_junction(goal)
+                    down_node = self.get_down_junction(goal)
+     
+                    # go to down node if up node lies in the same row as start
+                    if start[0] == up_node[0]:
+                        total_dist = manhattan_distance(start, down_node) + manhattan_distance(down_node, goal)
+                        final_heading = (-1,0)
+                    # go to up node if down node lies in the same row as start
+                    elif start[0] == down_node[0]:
+                        total_dist = manhattan_distance(start, up_node) + manhattan_distance(up_node, goal)
+                        final_heading = (1,0)
+                    else:
+                        total_dist = manhattan_distance(start, goal)
+                        final_heading = get_heading((start[0], goal[1]), goal)
+                    return total_dist, final_heading
+
+    def distance_between_nodes_with_headings(self, start, start_heading, goal, goal_heading):
+        dist, final_heading = self.distance_between_nodes(start, goal, start_heading)
+        if not opposite_headings(final_heading, goal_heading):
+            return dist
+
+        # Goal heading is opposite of final_heading
+        perimeter = 4 + 2*(self.stack_len+1)
+
+        if start_heading in [(1,0),(-1,0)]:
+            start_junc = self.get_junction(start, start_heading)
+            gj = self.get_junction(goal, start_heading)
+            goal_junc = self.get_junction(goal, (-goal_heading[0], goal_heading[1]))
+            # the agent has to move atleast this distance 
+            min_dist = manhattan_distance(start, start_junc) + manhattan_distance(start_junc, goal_junc) + manhattan_distance(goal_junc, goal)
+
+            # if start and goal are in the same column
+            if start[1]==goal[1]:
+                # same block
+                if start_junc[0]==gj[0]:
+                    # top or bottom block
+                    if start_junc[0]==0 or start_junc[0]==self.shape[0]-1:
+                        extra = perimeter + 4
+                    else:
+                        extra = perimeter
+                # different blocks
+                else:
+                    extra = 4
+
+            # start and goal are in adjacent sampling columns        
+            elif abs(start[1]-goal[1])==2:
+                if start_heading == goal_heading:
+                    extra = 4
+                else:
+                    extra = 0
+
+            else:
+                extra = 0
+        else:
+            raise NotImplementedError
+
+        return min_dist + extra
 
     def get_junction(self, pose, heading):
         # return junction in the heading direction
@@ -130,9 +176,7 @@ class Map(object):
             return self.get_up_junction(pose)
         else:
             return pose
-            # print(pose, heading)
-            raise NotImplementedError
-
+            
     def get_up_junction(self, pose):
         # return up junction (in decreasing x direction)
         up = max([x for x in self.row_pass_indices if x<=pose[0]])
@@ -171,14 +215,14 @@ class Map(object):
 
 
 if __name__ == '__main__':
-    small_map = Map(num_gp_rows=15, num_gp_cols=15, num_row_passes=2, row_pass_width=1)
-
-    waypoints = [(7,6), (15,16), (11,10), (5,10)]
-    for w in waypoints:
-        print(w, small_map.map_pose_to_gp_pose(w), small_map.occupied[w])
+    smap = Map(num_gp_rows=15, num_gp_cols=15, num_row_passes=2, row_pass_width=1)
+    ipdb.set_trace()
+    # waypoints = [(7,6), (15,16), (11,10), (5,10)]
+    # for w in waypoints:
+    #     print(w, smap.map_pose_to_gp_pose(w), smap.occupied[w])
     
-    start = (0,0)
-    heading = (1,0)
-    path_length = small_map.nearest_waypoint_path_cost(start, heading, waypoints)
+    # start = (0,0)
+    # heading = (1,0)
+    # path_length = smap.nearest_waypoint_path_cost(start, heading, waypoints)
 
 
