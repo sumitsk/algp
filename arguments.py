@@ -17,7 +17,7 @@ def get_args():
     parser.add_argument('--latent', default=None, help='latent function in GP model')
     
     parser.add_argument('--num_sims', default=10, type=int, help='number of simulations')
-    parser.add_argument('--num_runs', default=10, type=int, help='number of batches')
+    parser.add_argument('--num_runs', default=6, type=int, help='number of batches')
     parser.add_argument('--fraction_pretrain', default=.75, type=float, help='fraction of all training data used for learning hyperparameters')
     parser.add_argument('--num_samples_per_batch', default=4, type=int, help='number of static samples collected in each batch')
     parser.add_argument('--slack', default=0, type=int, help='budget = shortest path length + slack')

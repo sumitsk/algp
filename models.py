@@ -6,7 +6,7 @@ import gpytorch
 from gpytorch.kernels import RBFKernel, WhiteNoiseKernel, MaternKernel, SpectralMixtureKernel, ScaleKernel
 from gpytorch.means import ZeroMean
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.random_variables import GaussianRandomVariable
+from gpytorch.distributions import MultivariateNormal
 
 from utils import to_torch, to_numpy, process_variance
 import ipdb
@@ -119,7 +119,8 @@ class GPR(object):
 
     def reset(self, x, y, var):
         self.set_train_data(x, y, var)
-        self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
+        # self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
+        self.likelihood = GaussianLikelihood()
         self.model = ExactGPModel(self._train_x, self._zero_mean_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
@@ -252,4 +253,4 @@ class ExactGPModel(gpytorch.models.ExactGP):
         x = self.latent_func(inp)
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
-        return GaussianRandomVariable(mean_x, covar_x)
+        return MultivariateNormal(mean_x, covar_x)

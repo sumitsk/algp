@@ -128,6 +128,7 @@ class Agent(object):
 
         least_cost_paths = 0
         test_rmse = []
+        collected_count = []
 
         for i in range(num_runs):
             print('\n==================================================================================================')
@@ -173,9 +174,6 @@ class Agent(object):
                 if least_cost == paths_cost[best_idx]:
                     least_cost_paths += 1
 
-                if render:
-                    self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
-                
                 # update agent statistics
                 self.path = np.concatenate([self.path, next_path[1:]], axis=0).astype(int)
                 self.pose = tuple(self.path[-1])
@@ -184,7 +182,14 @@ class Agent(object):
                 # add samples
                 self._add_samples(next_path_indices, source='mobile')
             
+                if render:
+                    pred, _ = self.predict(self.env.all_x)
+                    pred = pred.reshape(self.env.shape)
+                    true = self.env.all_y.reshape(self.env.shape)
+                    self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
+                
             self._add_samples(new_gp_indices, source='static')
+            collected_count.append(len(next_path_indices) + len(new_gp_indices))
             
             # update hyperparameters of GP model
             if update and (i+1) % self.update_every == 0:
@@ -197,7 +202,7 @@ class Agent(object):
 
             print('\n-------- Prediction -------------- ')
             start = time.time()
-            pred, cov = self.predict_test()
+            pred, cov = self.predict()
             var = np.diag(cov)
             rmse = compute_rmse(self.env.test_Y, pred)
             print('RMSE: {:.4f}'.format(rmse))
@@ -218,7 +223,7 @@ class Agent(object):
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
 
         # results = {'least_cost_paths': least_cost_paths, 'rmse': test_rmse, 'mobile_samples_count': mobile_samples_count}
-        results = {'mean': pred, 'rmse':test_rmse}
+        results = {'mean': pred, 'rmse':test_rmse, 'count':collected_count}
         return results
 
     # def predict_train(self, test_ind=None):
@@ -234,10 +239,11 @@ class Agent(object):
     #     cov = cov_xx - np.dot(mat1, cov_xa.T)
     #     return mu, np.diag(cov)
 
-    def predict_test(self):
+    def predict(self, x=None):
+        x = self.env.test_X if x is None else x
         train_ind, train_y, train_var = self.get_sampled_dataset()
         train_x = self.env.X[train_ind]
-        mu, cov = posterior_distribution(self.gp, train_x, train_y, self.env.test_X, train_var, return_cov=True)
+        mu, cov = posterior_distribution(self.gp, train_x, train_y, x, train_var, return_cov=True)
         return mu, cov
 
     def greedy(self, num_samples):
@@ -350,4 +356,50 @@ class Agent(object):
         idx = np.argmax(all_ut)
         return idx
 
-        
+    def run_naive(self, num_samples, source='static'):
+        # traverse each row from start to end in a naive manner
+        # num_samples should be list of ints
+        self.reset()
+        test_rmse = []
+
+        for ns in num_samples:
+            inds = []
+            # collect ns samples 
+            while len(inds) != ns:
+                # keep moving in the heading direction till you reach the end and need to shift to the next row
+
+                next_pose = (self.pose[0]+self.heading[0], self.pose[1]+self.heading[1])
+                ind = self.env.map_pose_to_gp_index_matrix[next_pose]
+                if ind is not None:
+                    inds.append(ind)
+
+                if next_pose[0] == self.env.map.shape[0] - 1:
+                    poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]-1, next_pose[1]+2)]
+                    self.path = np.concatenate([self.path, poses], axis=0).astype(int)
+                    self.heading = (-self.heading[0], 0)                       
+                    self.pose = poses[-1]
+                    
+                elif next_pose[0] == 0:
+                    poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]+1, next_pose[1]+2)]
+                    self.path = np.concatenate([self.path, poses], axis=0).astype(int)
+                    self.heading = (-self.heading[0], 0)
+                    self.pose = poses[-1]
+
+                else:
+                    self.path = np.concatenate([self.path, [next_pose]], axis=0).astype(int)
+                    self.pose = next_pose
+
+            self._add_samples(inds, source)
+            mu, cov = self.predict()
+            rmse = compute_rmse(self.env.test_Y, mu)
+            test_rmse.append(rmse)
+
+        var = np.diag(cov)
+        print('==========================================================')
+        print('--- Final statistics --- ')
+        print('RMSE: {:.4f}'.format(rmse))
+        print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
+
+        # final predictions 
+        results = {'mean': mu, 'rmse':test_rmse}
+        return results

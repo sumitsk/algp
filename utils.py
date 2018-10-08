@@ -125,7 +125,7 @@ def generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, alg
         elif algo == 'sum':
             y += tmp
 
-    return grid, y/y.max()
+    return grid, y
 
 
 def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2, algo='sum'):
@@ -157,7 +157,22 @@ def generate_mixed_data(num_rows, num_cols, num_zs=4, k=4, min_var=.1, max_var=2
             y = np.maximum(y, tmp)
         elif algo == 'sum':
             y += tmp
-    return grid, y/y.max()
+    return grid, y
+
+
+def generate_phenotype_data(num_rows=20, num_cols=15, num_zs=4, min_var=1, max_var=10, algo='sum'):
+    all_y = []
+    for _ in range(num_zs):
+        grid, y = generate_gaussian_data(num_rows, num_cols, k=5, min_var=10, max_var=100, algo='sum')
+        all_y.append(y)
+
+    n = num_rows * num_cols
+    z_ind = np.random.randint(0, num_zs, n)
+    z = np.zeros((n, num_zs))
+    z[np.arange(n), z_ind] = 1
+    grid = np.concatenate([grid, z], axis=1)    
+    final_y = np.sum(z * np.vstack(all_y).T, axis=1)
+    return grid, final_y, all_y
 
 
 def mi_change(x, a, a_bar, gp, x_variance=None, a_variance=None, a_bar_variance=None):

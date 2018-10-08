@@ -2,21 +2,26 @@ import numpy as np
 import ipdb
 
 from map import Map
-from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance
+from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance, generate_phenotype_data
 from networkx import nx
 from copy import deepcopy
 from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node, lower_bound_path_cost
 import matplotlib.pyplot as plt
+import seaborn as sns
 import time
           
 
 class FieldEnv(object):
     def __init__(self, data_file=None, phenotype='plant_count', extra_features=['leaf_fill', 'grvi'], num_test=40):
         super(FieldEnv, self).__init__()
-
         if data_file is None:
-            raise NotImplementedError('Provided Filename for dataset')
-        
+            self.num_rows = 25
+            self.num_cols = 15
+            x, y, self.y_category = generate_phenotype_data(num_rows=self.num_rows, num_cols=self.num_cols, num_zs=4)
+            x[:,1] *= 2
+            self._setup(x, y, num_test)
+            self._place_samples_others(row_start=0, row_inc=1)
+
         else:
             # for intel dataset
             if 'intel' in data_file:
@@ -25,60 +30,58 @@ class FieldEnv(object):
                 x = mat['Xss']
                 y = mat['Fss'].squeeze()
                 self.num_rows = 15
-                self.num_cols = 17
-                n = len(x)
-                perm = np.random.permutation(n)
-                test_ind = perm[:num_test]
-                train_ind = perm[num_test:]
-                
-                self.X = x[train_ind]
-                self.Y = y[train_ind]
-                self.test_X = x[test_ind]
-                self.test_Y = y[test_ind]
+                self.num_cols = 17                
+                self._setup(x, y, num_test)
+                self._place_samples_others(row_start=0, row_inc=3)
 
-                self.map = Map(self.num_rows, self.num_cols)
-                self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
-                self.gp_index_to_map_pose_array = np.full(len(self.X), None)
-                
-                x = self.X[:,:2]
-                indices = np.arange(len(x))
-                row = 0
-                for i in range(self.map.shape[0]):
-                    if i in self.map.row_pass_indices:
-                        continue
-                    row_indices = indices[x[:,0]==row]
-                    for ind in row_indices:
-                        map_pose = (i, int(x[ind,1]))
-                        self.map_pose_to_gp_index_matrix[map_pose] = ind 
-                        self.gp_index_to_map_pose_array[ind] = map_pose
-                    row += 3
-
+            # for sorghum dataset
             else: 
-                self.num_rows, self.num_cols, self.X, self.Y = load_data_from_pickle(data_file, target_feature=phenotype,
-                                                                                     extra_input_features=extra_features, max_range=25)
-                n = len(self.X)
-                perm = np.random.permutation(n)
-                test_ind = perm[:num_test]
-                train_ind = perm[num_test:]
-                
-                self.test_X = np.copy(self.X[test_ind])
-                self.test_Y = np.copy(self.Y[test_ind])
-                
-                self.X = self.X[train_ind]
-                self.Y = self.Y[train_ind]
-                
-                self.map = Map(self.num_rows, self.num_cols, num_row_passes=4)
-                self._place_samples()
+                self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, extra_input_features=extra_features, max_range=25)
+                self._setup(x, y, num_test)
+                self._place_samples_pheno()
 
+        self.all_x = np.copy(x)
+        self.all_y = np.copy(y)
+        
         self._setup_graph()
         # for rendering
         self.fig = None
         self.ax = None
 
-    def _place_samples(self):
+    def _setup(self, x, y, num_test):
+        # split dataset 
+        n = len(x)
+        perm = np.random.permutation(n)
+        test_ind = perm[:num_test]
+        train_ind = perm[num_test:]
+        
+        self.X = x[train_ind]
+        self.Y = y[train_ind]
+        self.test_X = x[test_ind]
+        self.test_Y = y[test_ind]
+
+        # setup map
+        self.map = Map(self.num_rows, self.num_cols, num_row_passes=4)
         self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
         self.gp_index_to_map_pose_array = np.full(len(self.X), None)
+
+    def _place_samples_others(self, row_start=0, row_inc=1):
+        x = self.X[:,:2]
+        indices = np.arange(len(x))
+        row = row_start
+        for i in range(self.map.shape[0]):
+            if i in self.map.row_pass_indices:
+                continue
+            row_indices = indices[x[:,0]==row]
+            for ind in row_indices:
+                map_pose = (i, int(x[ind,1]))
+                self.map_pose_to_gp_index_matrix[map_pose] = ind 
+                self.gp_index_to_map_pose_array[ind] = map_pose
+            row += row_inc
+
+    def _place_samples_pheno(self):
         row = 2
+        row_inc = 2
         x = self.X[:,:2]
         indices = np.arange(len(x))
         for i in range(self.map.shape[1]):
@@ -90,7 +93,7 @@ class FieldEnv(object):
                 map_pose = (int(t), row-2)
                 self.map_pose_to_gp_index_matrix[map_pose] = ind 
                 self.gp_index_to_map_pose_array[ind] = map_pose
-            row += 2
+            row += row_inc
             
     def _normalize_dataset(self):
         self.X = self.X.astype(float)
@@ -222,6 +225,7 @@ class FieldEnv(object):
                 # min_dist_to_go = self.get_heuristic_cost(new_pose, new_heading, remaining_waypoints, least_cost)
                 min_dist_to_go = lower_bound_path_cost(new_pose, remaining_waypoints)
                 if new_gval + min_dist_to_go > least_cost + slack:
+                    # print('Skipping!')
                     continue
                 
                 new_tree_node = dict(pose=new_pose, heading=new_heading, visited=new_visited, gval=new_gval)
@@ -229,6 +233,7 @@ class FieldEnv(object):
                 if merge_to is not None:
                     tree.add_edge(parent_idx, merge_to, weight=cost)
                     count_merged += 1
+                    # print('Merging')
                     continue
                 
                 # NOTE: because of gp_indices computation, this is slow
@@ -252,9 +257,10 @@ class FieldEnv(object):
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
+        
         # end_time = time.time()
         # print('Time {:4f}'.format(end_time-start_time))
-        
+
         # start_time = time.time()
         all_paths_gen = [nx.all_shortest_paths(tree, root, t, weight='weight') for t in closed_list]
         # end_time = time.time()
@@ -424,28 +430,8 @@ class FieldEnv(object):
         assert isinstance(map_pose, tuple), 'Map pose must be a tuple'
         return self.map_pose_to_gp_index_matrix[map_pose]
 
-    def render(self, next_path_waypoints, all_paths, next_static_locations, all_static_locations):
-        if self.fig is None:
-            plt.ion()
-            self.fig, self.ax = plt.subplots(1,1)
-            # clear all ticks
-            self.ax.get_xaxis().set_visible(False)
-            self.ax.get_yaxis().set_visible(False)
-            # plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
-            # # color all the sampling locations
-            # for i in range(plot.shape[0]):
-            #     for j in range(plot.shape[1]):
-            #         if self.map_pose_to_gp_index_matrix[i,j] is not None:
-            #             plot[i,j] = np.array([255,218,185])/255
-            # plot[0,0] = [0,0,1]
-            # plt.imshow(plot)
-            # plt.show()
-            # ipdb.set_trace()
-        else:
-            self.ax.cla()
-
-
-        # self.ax.set_title('Environment')
+    def render_map(self, ax, next_path_waypoints, all_paths, next_static_locations, all_static_locations):
+        # ax.set_title('Environment')
         plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
         for i in range(plot.shape[0]):
                 for j in range(plot.shape[1]):
@@ -475,19 +461,48 @@ class FieldEnv(object):
             plot[next_static_locations[:,0], next_static_locations[:,1], :] = next_static_locations_color
 
         waypoints = [x[::-1] for x in next_path_waypoints]
-        draw_path(self.ax, waypoints, head_width=0.25, head_length=.2, linewidth=3.0, delta=None, color='green')
+        draw_path(ax, waypoints, head_width=0.25, head_length=.2, linewidth=3.0, delta=None, color='green')
 
         pose = all_paths[-1]
         plot[pose[0], pose[1], :] = [0, 0, 1]
-        self.ax.imshow(plot)
+        ax.imshow(plot)
+
+    def render(self, next_path_waypoints, all_paths, next_static_locations, all_static_locations, true=None, pred=None):
+        if true is not None and pred is not None:
+            num_axes = 3
+        else:
+            num_axes = 1
+
+        if self.fig is None:
+            plt.ion()
+            self.fig, self.ax = plt.subplots(ncols=num_axes, figsize=(4*num_axes, 6))
+            self.ax = [self.ax] if num_axes==1 else self.ax.flatten()
+            # clear all ticks
+            for ax_ in self.ax:
+                ax_.get_xaxis().set_visible(False)
+                ax_.get_yaxis().set_visible(False)
+        else:
+            # clear all axes
+            for ax_ in self.ax:
+                ax_.cla()
+
+        self.render_map(self.ax[0], next_path_waypoints, all_paths, next_static_locations, all_static_locations)
+        if num_axes == 3:
+            self.ax[0].set_title('Environment')
+            self.ax[1].set_title('Predicted values')
+            self.ax[1].imshow(pred)
+            # sns.heatmap(pred, ax=self.ax[1], cbar=False, square=False)
+            self.ax[2].set_title('Ground truth (Actual values)')
+            self.ax[2].imshow(true)
+            # sns.heatmap(true, ax=self.ax[2], cbar=False, square=False)
         plt.pause(1)
 
 
 if __name__ == '__main__':
     # env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')
     
-    env = FieldEnv(data_file='data/july_data.pkl')
-    
+    # env = FieldEnv(data_file='data/july_data.pkl')
+    env = FieldEnv()
     # pose = (3,38)
     # heading = (-1,0)
     # waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
@@ -504,9 +519,14 @@ if __name__ == '__main__':
     # heading = (1,0)
     # waypoints = [(1,4), (9,4)]
 
-    pose = (26,22)
+    # pose = (0,0)
+    # heading = (1,0)
+    # waypoints = [(1,0), (19,19), (16,18), (27,2)]
+
+    ipdb.set_trace()
+    pose = (25,4)
     heading = (1,0)
-    waypoints = [(28,28), (1,28), (29,2), (28,22)]
+    waypoints = [(27,19), (29,19)]
 
     least_cost_ub = env.get_heuristic_cost(pose, heading, waypoints)
     

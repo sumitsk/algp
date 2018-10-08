@@ -97,15 +97,33 @@ def static_vs_both(args):
 
 
 if __name__ == '__main__':
-    
     args = get_args()
-    env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
-    ll_noise = True
-    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)    
-    # ipdb.set_trace()
 
-    results = agent_common.run_ipp(mobile_enabled=True, update=False, render=True)
+    results_ipp = []
+    results_naive_static = []
+    results_naive_mobile = []
+    nsims = 1
 
+    for i in range(nsims):
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+        agent_common = Agent(env, args)    
+
+        agent1 = Agent(env, args, parent_agent=agent_common)
+        agent2 = Agent(env, args, parent_agent=agent_common)
+        agent3 = Agent(env, args, parent_agent=agent_common)
+
+        r1 = agent1.run_ipp(mobile_enabled=True, render=True)
+        ipdb.set_trace()
+                
+
+        r2 = agent2.run_naive(num_samples=r1['count'], source='static')
+        r3 = agent2.run_naive(num_samples=r1['count'], source='mobile')
+
+        results_ipp.append(r1['rmse'])
+        results_naive_static.append(r2['rmse'])
+        results_naive_mobile.append(r3['rmse'])
+
+    
     # Save arguments as json file
     # if not args.eval_only:
     #     with open(os.path.join(args.save_dir, "args.json"), 'w') as f:
