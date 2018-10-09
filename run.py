@@ -56,22 +56,23 @@ def static_vs_both(args):
     args_dict = vars(args)
     pprint(args_dict)
     
-    env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    extra_features = []
     
     ll_noise = True
-    agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
     all_res = []
     all_res_mobile = []
 
     sims = 3
     for _ in range(sims):
-        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, extra_features=extra_features, num_test=args.num_test)
+        agent_common = Agent(env, args, learn_likelihood_noise=ll_noise)
+    
         agent1 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res1 = agent1.run_ipp(num_runs=2*args.num_runs, criterion='monotonic_entropy', mobile_enabled=False, render=False)
+        res1 = agent1.run_ipp(num_runs=2*args.num_runs, criterion='entropy', mobile_enabled=False, render=False)
         all_res.append([x['rmse'] for x in res1])
 
         agent2 = Agent(env, args, parent_agent=agent_common, learn_likelihood_noise=ll_noise)
-        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='monotonic_entropy', mobile_enabled=True, render=False)
+        res2 = agent2.run_ipp(num_runs=args.num_runs, criterion='entropy', mobile_enabled=True, render=False)
         all_res_mobile.append([x['rmse'] for x in res2])
 
     r1 = np.stack(all_res)
@@ -96,18 +97,35 @@ def static_vs_both(args):
     ipdb.set_trace()
 
 
+def snr_test():
+    nsims = 5
+    all_rho = []
+    extra_features = []
+
+    for i in range(nsims):
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, extra_features=extra_features, num_test=args.num_test)
+        agent_common = Agent(env, args)
+        params = dict(agent_common.gp.model.named_parameters())
+        ss = np.exp(params['kernel_covar_module.log_outputscale'].item())
+        sn = np.exp(params['likelihood.log_noise'].item())
+        rho = ss**2/sn**2
+        all_rho.append(rho)
+    ipdb.set_trace()
+
+
 if __name__ == '__main__':
     args = get_args()
+    extra_features = []
 
     results_ipp = []
     results_naive_static = []
     results_naive_mobile = []
+
     nsims = 1
-
     for i in range(nsims):
-        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
-        agent_common = Agent(env, args)    
-
+        env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, extra_features=extra_features, num_test=args.num_test)
+        agent_common = Agent(env, args)
+        
         agent1 = Agent(env, args, parent_agent=agent_common)
         agent2 = Agent(env, args, parent_agent=agent_common)
         agent3 = Agent(env, args, parent_agent=agent_common)
@@ -123,7 +141,8 @@ if __name__ == '__main__':
         results_naive_static.append(r2['rmse'])
         results_naive_mobile.append(r3['rmse'])
 
-    
+    ipdb.set_trace()    
+
     # Save arguments as json file
     # if not args.eval_only:
     #     with open(os.path.join(args.save_dir, "args.json"), 'w') as f:

@@ -12,7 +12,7 @@ import time
           
 
 class FieldEnv(object):
-    def __init__(self, data_file=None, phenotype='plant_count', extra_features=['leaf_fill', 'grvi'], num_test=40):
+    def __init__(self, data_file=None, phenotype='plant_count', extra_features=[], num_test=40):
         super(FieldEnv, self).__init__()
         if data_file is None:
             self.num_rows = 25
@@ -36,7 +36,9 @@ class FieldEnv(object):
 
             # for sorghum dataset
             else: 
+                # extra_features = ['leaf_fill', 'grvi']
                 self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, extra_input_features=extra_features, max_range=25)
+                # y = zero_mean_unit_variance(y)
                 self._setup(x, y, num_test)
                 self._place_samples_pheno()
 
@@ -95,10 +97,6 @@ class FieldEnv(object):
                 self.gp_index_to_map_pose_array[ind] = map_pose
             row += row_inc
             
-    def _normalize_dataset(self):
-        self.X = self.X.astype(float)
-        self.X[:, :4] = zero_mean_unit_variance(self.X[:,:4])
-        
     def collect_samples(self, indices, noise_std):
         y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
         # truncating negative values to 0
