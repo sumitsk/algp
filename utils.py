@@ -294,20 +294,24 @@ def predictive_distribution(gp, train_x, train_y, test_x, train_var=None, test_v
 
     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
     mu = np.dot(mat1, (train_y-train_y_mean)) + train_y_mean
-    
+    if not (return_var or return_cov or return_mi):
+        return mu
+
+    cov = cov_xx - np.dot(mat1, cov_xa.T)
+
     if return_var:
-        cov = cov_xx - np.dot(mat1, cov_xa.T)
-        return mu, np.diag(cov)
+        res = (mu, np.diag(cov))
          
     if return_cov:
-        cov = cov_xx - np.dot(mat1, cov_xa.T)
-        return mu, cov
+        res = (mu, cov)
 
     if return_mi:
-        cov = cov_xx - np.dot(mat1, cov_xa.T)
         mi = entropy_from_cov(cov_xx) - entropy_from_cov(cov)
-        return mu, mi
-    return mu 
+        res = (mu, mi)
+
+    if return_cov and return_mi:
+        res = (mu, cov, mi)
+    return res
 
 
 def draw_path(ax, path, head_width=None, head_length=None, linewidth=None, delta=None, color=None):

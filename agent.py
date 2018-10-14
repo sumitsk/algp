@@ -185,7 +185,7 @@ class Agent(object):
                 self.heading = get_heading(self.path[-2], self.path[-1])
                 
                 if render:
-                    pred = self.predict(self.env.all_x, return_cov=False).reshape(self.env.shape)
+                    pred = self.predict(self.env.all_x).reshape(self.env.shape)
                     true = self.env.all_y.reshape(self.env.shape)
                     self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
             
@@ -211,8 +211,7 @@ class Agent(object):
             if disp:
                 print('\n-------- Prediction -------------- ')
             start = time.time()
-            pred, cov = self.predict()
-            var = np.diag(cov)
+            pred, var = self.predict(return_var=True)
             rmse = compute_rmse(self.env.test_Y, pred)
             test_rmse.append(rmse)
             end = time.time()
@@ -246,11 +245,11 @@ class Agent(object):
     #     cov = cov_xx - np.dot(mat1, cov_xa.T)
     #     return mu, np.diag(cov)
 
-    def predict(self, x=None, return_cov=True):
+    def predict(self, x=None, return_var=False, return_cov=False, return_mi=False):
         x = self.env.test_X if x is None else x
         train_ind, train_y, train_var = self.get_sampled_dataset()
         train_x = self.env.X[train_ind]
-        return predictive_distribution(self.gp, train_x, train_y, x, train_var, return_cov=return_cov)
+        return predictive_distribution(self.gp, train_x, train_y, x, train_var, return_var=return_var, return_cov=return_cov, return_mi=return_mi)
 
     def greedy(self, num_samples):
         # select most informative samples in a greedy manner
@@ -369,6 +368,7 @@ class Agent(object):
 
         self.reset()
         test_rmse = []
+        all_mi = []
 
         for ns in counts:
             inds = []
@@ -413,9 +413,10 @@ class Agent(object):
                     raise NotImplementedError
 
             self._add_samples(inds, [std]*len(inds))
-            mu, cov = self.predict()
+            mu, cov, mi = self.predict(return_cov=True, return_mi=True)
             rmse = compute_rmse(self.env.test_Y, mu)
             test_rmse.append(rmse)
+            all_mi.append(mi)
 
         var = np.diag(cov)
         strategy = 'Naive Static' if std==self.static_std else 'Naive Mobile'
@@ -424,7 +425,7 @@ class Agent(object):
         print('--- Final statistics --- ')
         print('Test RMSE: {:.4f}'.format(rmse))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-        results = {'mean': mu, 'rmse': test_rmse}
+        results = {'mean': mu, 'rmse': test_rmse, 'mi': all_mi}
         return results
 
     def get_samples_sequence_from_path(self, path, waypoints):
@@ -466,7 +467,7 @@ class Agent(object):
                 x = self.env.X[inds[valid]]
                 var = np.array(self.collected['std'])[:count][valid]**2
                 y = np.array(self.collected['y'])[:count][valid]
-                mu, mi_test = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True)            
+                mu, mi = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True)            
             rmse = compute_rmse(self.env.test_Y, mu)
             all_rmse.append(rmse)
             all_mi.append(mi)
