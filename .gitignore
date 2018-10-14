@@ -1,6 +1,7 @@
 data/
 outputs/
 data_analysis/
+exps/ 
 
 configure_data.py
 multi_task_models.py
@@ -8,3 +9,5 @@ hadamard_mt.py
 plots.py
 methods.py
 var_test.py
+test.py
+snr_test.py
