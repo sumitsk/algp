@@ -3,6 +3,8 @@ outputs/
 data_analysis/
 
 configure_data.py
-intel.py
 multi_task_models.py
 hadamard_mt.py
+plots.py
+methods.py
+var_test.py

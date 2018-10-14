@@ -1,17 +1,19 @@
-import ipdb
 import numpy as np
 import torch 
-
-from utils import entropy_from_cov, compute_rmse, posterior_distribution, get_monotonic_entropy_constant, find_shortest_path, find_equi_sample_path
-from graph_utils import get_heading
-from models import GPR
 import time
+
+from models import GPR
+from graph_utils import get_heading
+from utils import entropy_from_cov, compute_rmse, predictive_distribution, find_shortest_path, find_equi_sample_path
+import ipdb
 
 
 class Agent(object):
     def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=True, mobile_std=None, static_std=None):
         super()
         self.env = env
+        # NOTE: the current GPytorch version (by default) will learn the likelihood noise
+        # TODO: modify GaussianLikelihood to fix measurement noise
         self.learn_likelihood_noise = learn_likelihood_noise
         self._init_model(args)
 
@@ -29,15 +31,9 @@ class Agent(object):
             self.load_model(parent_agent)
 
     def _init_model(self, args):
-        kernel_params = self._get_kernel_params(args)
+        kernel_params = {'type': args.kernel}
         self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params,
                       learn_likelihood_noise=self.learn_likelihood_noise)
-        
-    def _get_kernel_params(self, args):
-        kernel_params = {'type': args.kernel}
-        if args.kernel == 'spectral_mixture':
-            kernel_params['n_mixtures'] = args.n_mixtures
-        return kernel_params
 
     def load_model(self, parent_agent):
         self.gp.reset(parent_agent.gp.train_x, parent_agent.gp.train_y, parent_agent.gp.train_var)
@@ -48,36 +44,51 @@ class Agent(object):
         torch.save(state, filename)
 
     def reset(self):
-        self.static_data = [[] for _ in range(self.env.num_samples)]
-        self.mobile_data = [[] for _ in range(self.env.num_samples)]
         self.pose = (0, 0)
         self.heading = (1, 0)
         self.path = np.copy(self.pose).reshape(-1, 2)
+        self.collected = {'ind': [], 'std': [], 'y': []}
         self.static_locations = np.empty((0, 2))
+        self.static_data = [[] for _ in range(self.env.num_samples)]
+        self.mobile_data = [[] for _ in range(self.env.num_samples)]
         
     def _pre_train(self, num_samples):
         print('====================================================')
         print('--- Pretraining ---')
-        ind = np.random.permutation(self.env.num_samples)[:num_samples]
-        self._add_samples(ind, source='static')
+        self.pilot_survey(num_samples, self.static_std)
         self.update_model()
         # if don't want to remember/condition on pre_train data points    
         # self.reset()    
+
+    def pilot_survey(self, num_samples, std):
+        ind = np.random.permutation(self.env.num_samples)[:num_samples]
+        self._add_samples(ind, stds=[std]*num_samples)
         
-    def _add_samples(self, indices, source='static'):
-        std = self.static_std if source == 'static' else self.mobile_std
-        y = self.env.collect_samples(indices, std)
+    def _add_samples(self, indices, stds):
+        all_y = [None]*len(indices)
         for i in range(len(indices)):
             idx = indices[i]
-            if source == 'static':
-                self.static_data[idx].append(y[i])
+            if idx == -1:
+                continue
+            y = self.env.collect_samples(idx, stds[i])
+            all_y[i] = y
+            if stds[i] == self.static_std:
+                self.static_data[idx].append(y)
             else:
-                self.mobile_data[idx].append(y[i])
+                self.mobile_data[idx].append(y)
+
+        # update collected
+        self.collected['ind'] += list(indices)
+        self.collected['std'] += list(stds)
+        self.collected['y'] += all_y
 
     def update_model(self):
         indices, y, var = self.get_sampled_dataset()        
         x = self.env.X[indices]
         self.gp.fit(x, y, var)
+        
+    def _post_update(self):
+        self.cov_matrix = self.gp.cov_mat(x1=self.env.X, add_likelihood_var=True)
         
     def get_sampled_dataset(self):
         all_y = []
@@ -106,33 +117,25 @@ class Agent(object):
 
         return indices, np.array(all_y), np.array(all_var)
 
-    def _post_update(self):
-        # add small value to diagonal (for example constant likelihood noise)
-        self.cov_matrix = self.gp.cov_mat(x1=self.env.X, add_likelihood_var=True)
-        if self.criterion == 'monotonic_entropy':
-            self.entropy_constant = get_monotonic_entropy_constant(self.cov_matrix)
-        else:
-            self.entropy_constant = None
-
     def _setup_ipp(self, criterion, update):
         self.criterion = criterion
         if not update:
             self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', mobile_enabled=False, update=False, slack=0, strategy='max_ent'):
-        # this function selects k points greedily and then finds the path that maximises the total information gain 
-        assert strategy in ['max_ent', 'shortest', 'equi_sample'], 'Unknown strategy!!'
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', mobile_enabled=True, update=False, slack=0, strategy='MaxEnt', disp=True):
+        # informative path planner
+        assert strategy in ['MaxEnt', 'Shortest', 'Equi-sample'], 'Unknown strategy!!'
         assert criterion in ['entropy', 'mutual_information'], 'Unknown criterion!!'
         self._setup_ipp(criterion, update)
 
-        least_cost_paths = 0
         test_rmse = []
-        collected_count = []
 
         for i in range(num_runs):
-            print('\n==================================================================================================')
-            print('Run {}/{}'.format(i+1, num_runs))
+            if disp:
+                print('\n==================================================================================================')
+                print('Run {}/{}'.format(i+1, num_runs))
+            
             run_start = time.time()
             
             # greedily select static samples
@@ -140,90 +143,94 @@ class Agent(object):
             waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
             next_static_locations = np.stack(waypoints)
             self.static_locations = np.concatenate([self.static_locations, next_static_locations]).astype(int)
-            
-            # Gather data along path only when mobile is enabled
-            if mobile_enabled:          
-                print('------ Finding valid paths ---------')
-                print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
-                start = time.time()
 
-                least_cost_ub = self.env.get_heuristic_cost(self.pose, self.heading, waypoints)
-                print('Least cost upper bound:',least_cost_ub)
+            # Gather data along path 
+            if mobile_enabled:    
+                if disp:      
+                    print('------ Finding valid paths ---------')
+                    print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
                 
-                paths_checkpoints, paths_indices, paths_cost = self.env.get_shortest_path_waypoints(self.pose, self.heading, waypoints, least_cost_ub, slack)
-                end = time.time()
-                print('Number of feasible paths: ', len(paths_indices))
-                print('Time consumed {:.4f}'.format(end - start))
-
-                print('\n------ Finding best path ----------')
+                # find all paths 
                 start = time.time()
-                if strategy == 'shortest':
+                least_cost_ub = self.env.get_heuristic_cost(self.pose, self.heading, waypoints)
+                if disp:
+                    print('Least cost upper bound:',least_cost_ub)
+                paths_checkpoints, paths_indices, paths_cost = self.env.get_all_paths(self.pose, self.heading, waypoints, least_cost_ub, slack)
+                end = time.time()
+                if disp:
+                    print('Number of feasible paths: ', len(paths_indices))
+                    print('Time consumed {:.4f}'.format(end - start))
+                    print('\n------ Finding best path ----------')
+                
+                # find optimal path
+                start = time.time()
+                if strategy == 'Shortest':
                     best_idx = find_shortest_path(paths_cost)
                 else:
                     best_idx = self.best_path(paths_indices, new_gp_indices)
-                    if strategy == 'equi_sample':
+                    if strategy == 'Equi-sample':
                         best_idx = find_equi_sample_path(paths_indices, best_idx)
-
-                next_path_indices = paths_indices[best_idx]
-                next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))
                 end = time.time()
-                least_cost = min(paths_cost)
-                print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
-                print('Time consumed {:.4f}'.format(end - start))
-                
-                if least_cost == paths_cost[best_idx]:
-                    least_cost_paths += 1
 
-                # update agent statistics
-                self.path = np.concatenate([self.path, next_path[1:]], axis=0).astype(int)
+                if disp:
+                    least_cost = min(paths_cost)
+                    print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
+                    print('Time consumed {:.4f}'.format(end - start))
+                
+                # update agent's record
+                next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))[1:]
+                next_path_indices, stds = self.get_samples_sequence_from_path(next_path, waypoints)
+                self.path = np.concatenate([self.path, next_path], axis=0).astype(int)
                 self.pose = tuple(self.path[-1])
                 self.heading = get_heading(self.path[-2], self.path[-1])
-        
-                # add samples
-                self._add_samples(next_path_indices, source='mobile')
-            
+                
                 if render:
-                    pred, _ = self.predict(self.env.all_x)
-                    pred = pred.reshape(self.env.shape)
+                    pred = self.predict(self.env.all_x, return_cov=False).reshape(self.env.shape)
                     true = self.env.all_y.reshape(self.env.shape)
                     self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
-                
-            self._add_samples(new_gp_indices, source='static')
-            collected_count.append(len(next_path_indices) + len(new_gp_indices))
+            
+            # TODO: a few things need to be done over here to make the else condition compatible 
+            else:
+                pass
+
+            # gather samples
+            self._add_samples(next_path_indices, stds)
             
             # update hyperparameters of GP model
             if update and (i+1) % self.update_every == 0:
-                print('\n---------- Updating model --------------')
+                if disp:
+                    print('\n---------- Updating model --------------')
                 start = time.time()
                 self.update_model()
                 self._post_update()
                 end = time.time()
-                print('Time consumed {:.4f}'.format(end - start))
+                if disp:
+                    print('Time consumed {:.4f}'.format(end - start))
 
-            print('\n-------- Prediction -------------- ')
+            # predict on test set
+            if disp:
+                print('\n-------- Prediction -------------- ')
             start = time.time()
             pred, cov = self.predict()
             var = np.diag(cov)
             rmse = compute_rmse(self.env.test_Y, pred)
-            print('RMSE: {:.4f}'.format(rmse))
-            print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-            end = time.time()
-            print('Time consumed {:.4f}'.format(end - start))
-
-            # log predictions
-            # res = {'mean': pred, 'covariance': cov, 'rmse': rmse}
             test_rmse.append(rmse)
-            
+            end = time.time()
+            if disp:
+                print('Test RMSE: {:.4f}'.format(rmse))
+                print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
+                print('Time consumed {:.4f}'.format(end - start))
+
             run_end = time.time()
-            print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
+            if disp:
+                print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
 
         print('==========================================================')
+        print('Strategy: {:s}'.format(strategy))
         print('--- Final statistics --- ')
-        print('RMSE: {:.4f}'.format(rmse))
+        print('Test RMSE: {:.4f}'.format(rmse))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-
-        # results = {'least_cost_paths': least_cost_paths, 'rmse': test_rmse, 'mobile_samples_count': mobile_samples_count}
-        results = {'mean': pred, 'rmse':test_rmse, 'count':collected_count}
+        results = {'mean': pred, 'rmse':test_rmse}
         return results
 
     # def predict_train(self, test_ind=None):
@@ -239,12 +246,11 @@ class Agent(object):
     #     cov = cov_xx - np.dot(mat1, cov_xa.T)
     #     return mu, np.diag(cov)
 
-    def predict(self, x=None):
+    def predict(self, x=None, return_cov=True):
         x = self.env.test_X if x is None else x
         train_ind, train_y, train_var = self.get_sampled_dataset()
         train_x = self.env.X[train_ind]
-        mu, cov = posterior_distribution(self.gp, train_x, train_y, x, train_var, return_cov=True)
-        return mu, cov
+        return predictive_distribution(self.gp, train_x, train_y, x, train_var, return_cov=return_cov)
 
     def greedy(self, num_samples):
         # select most informative samples in a greedy manner
@@ -260,7 +266,7 @@ class Agent(object):
         sampled = static_sampled | mobile_sampled
         var = 1.0 / (1.0/static_var[sampled] + 1.0/mobile_var[sampled])
         cov_v = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
-        ent_v = entropy_from_cov(cov_v, self.entropy_constant)
+        ent_v = entropy_from_cov(cov_v)
 
         cumm_utilities = []
         new_samples = []
@@ -280,7 +286,7 @@ class Agent(object):
         
                 # a - set of all sampled locations 
                 cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
-                ent_a = entropy_from_cov(cov_a, self.entropy_constant)
+                ent_a = entropy_from_cov(cov_a)
                 if self.criterion == 'mutual_information':
                     cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
                     ent_abar = entropy_from_cov(cov_abar)
@@ -338,7 +344,7 @@ class Agent(object):
         
             # a - set of all sampled locations 
             cov_a = self.cov_matrix[sampled].T[sampled].T + np.diag(var)
-            ent_a = entropy_from_cov(cov_a, self.entropy_constant)
+            ent_a = entropy_from_cov(cov_a)
             if self.criterion == 'mutual_information':
                 cov_abar = self.cov_matrix[~sampled].T[~sampled].T 
                 ent_abar = entropy_from_cov(cov_abar)
@@ -356,50 +362,112 @@ class Agent(object):
         idx = np.argmax(all_ut)
         return idx
 
-    def run_naive(self, num_samples, source='static'):
+    def run_naive(self, std, counts, metric='distance'):
         # traverse each row from start to end in a naive manner
-        # num_samples should be list of ints
+        # counts should be list of ints
+        # metric - either distance or sample
+
         self.reset()
         test_rmse = []
 
-        for ns in num_samples:
+        for ns in counts:
             inds = []
-            # collect ns samples 
-            while len(inds) != ns:
+            c = 0
+            done = False
+            while not done:
                 # keep moving in the heading direction till you reach the end and need to shift to the next row
-
                 next_pose = (self.pose[0]+self.heading[0], self.pose[1]+self.heading[1])
                 ind = self.env.map_pose_to_gp_index_matrix[next_pose]
                 if ind is not None:
                     inds.append(ind)
 
-                if next_pose[0] == self.env.map.shape[0] - 1:
-                    poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]-1, next_pose[1]+2)]
-                    self.path = np.concatenate([self.path, poses], axis=0).astype(int)
-                    self.heading = (-self.heading[0], 0)                       
-                    self.pose = poses[-1]
-                    
-                elif next_pose[0] == 0:
-                    poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]+1, next_pose[1]+2)]
-                    self.path = np.concatenate([self.path, poses], axis=0).astype(int)
-                    self.heading = (-self.heading[0], 0)
-                    self.pose = poses[-1]
+                if metric == 'samples':
+                    if next_pose[0] == self.env.map.shape[0] - 1:
+                        poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]-1, next_pose[1]+2)]
+                        self.path = np.concatenate([self.path, poses], axis=0).astype(int)
+                        self.heading = (-self.heading[0], 0)                       
+                        self.pose = poses[-1]
+                        
+                    elif next_pose[0] == 0:
+                        poses = [next_pose, (next_pose[0], next_pose[1]+1), (next_pose[0], next_pose[1]+2), (next_pose[0]+1, next_pose[1]+2)]
+                        self.path = np.concatenate([self.path, poses], axis=0).astype(int)
+                        self.heading = (-self.heading[0], 0)
+                        self.pose = poses[-1]
 
-                else:
+                    else:
+                        self.path = np.concatenate([self.path, [next_pose]], axis=0).astype(int)
+                        self.pose = next_pose
+
+                    done = len(inds)==ns
+
+                elif metric == 'distance':
+                    c += 1
                     self.path = np.concatenate([self.path, [next_pose]], axis=0).astype(int)
+                    if next_pose[0]==0 and next_pose[1]%2==0:
+                        self.heading = (0,1) if self.heading==(-1,0) else (1,0)
+                    elif next_pose[0]==self.env.map.shape[0]-1 and next_pose[1]%2==0:
+                        self.heading = (0,1) if self.heading==(1,0) else (-1,0)
                     self.pose = next_pose
+                    done = c==ns
+                else:
+                    raise NotImplementedError
 
-            self._add_samples(inds, source)
+            self._add_samples(inds, [std]*len(inds))
             mu, cov = self.predict()
             rmse = compute_rmse(self.env.test_Y, mu)
             test_rmse.append(rmse)
 
         var = np.diag(cov)
+        strategy = 'Naive Static' if std==self.static_std else 'Naive Mobile'
         print('==========================================================')
+        print('Strategy: ', strategy)
         print('--- Final statistics --- ')
-        print('RMSE: {:.4f}'.format(rmse))
+        print('Test RMSE: {:.4f}'.format(rmse))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-
-        # final predictions 
-        results = {'mean': mu, 'rmse':test_rmse}
+        results = {'mean': mu, 'rmse': test_rmse}
         return results
+
+    def get_samples_sequence_from_path(self, path, waypoints):
+        indices = []
+        std = []
+        sampled = [False]*len(waypoints)
+        for loc in path:
+            loc = tuple(loc)
+            gp_index = self.env.map_pose_to_gp_index_matrix[loc]
+            indices.append(gp_index if gp_index is not None else -1)
+            if gp_index is not None:
+                if loc in waypoints:
+                    idx = waypoints.index(loc)
+                    if not sampled[idx]:
+                        std.append(self.static_std)
+                        sampled[idx] = True
+                    else:
+                        std.append(self.mobile_std)
+                else:
+                    std.append(self.mobile_std)
+            else:
+                std.append(-1)
+        return indices, std
+
+    def prediction_vs_distance(self, k, num_runs):
+        count = 0
+        all_rmse = []
+        all_mi = []
+
+        while count < k*num_runs:
+            count += k
+            inds = np.array(self.collected['ind'][:count])
+            valid = inds!=-1
+
+            if sum(valid)==0:
+                mu = np.zeros(len(self.env.test_Y))
+                mi = 0
+            else:
+                x = self.env.X[inds[valid]]
+                var = np.array(self.collected['std'])[:count][valid]**2
+                y = np.array(self.collected['y'])[:count][valid]
+                mu, mi_test = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True)            
+            rmse = compute_rmse(self.env.test_Y, mu)
+            all_rmse.append(rmse)
+            all_mi.append(mi)
+        return all_rmse, all_mi

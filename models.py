@@ -8,7 +8,7 @@ from gpytorch.means import ZeroMean
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.distributions import MultivariateNormal
 
-from utils import to_torch, to_numpy, process_variance
+from utils import to_torch, to_numpy
 import ipdb
 
 
@@ -162,21 +162,22 @@ class GPR(object):
             losses.append(loss.item())
         print('Initial LogLikelihood {:.3f} Final LogLikelihood {:.3f}'.format(initial_ll, final_ll))
         
-    def cov_mat(self, x1, x2=None, var=None, add_likelihood_var=False):
+    def cov_mat(self, x1, x2=None, white_noise_var=None, add_likelihood_var=False):
+        # white_noise_var needs to be passed explicitly
         x1_ = to_torch(x1)
         x2_ = to_torch(x2)
         
-        # NOTE: set model to eval mode
         self.model.eval()
         with torch.no_grad():
             x1_ = self.model.latent_func(x1_)
             if x2_ is None or torch.equal(x1_, x2_):
-                cov = self.model.covar_module(x1_).evaluate().cpu().numpy()
+                cov = self.model.kernel_covar_module(x1_).evaluate().cpu().numpy()
             else:
                 x2_ = self.model.latent_func(x2_)
-                cov = self.model.covar_module(x1_, x2_).evaluate().cpu().numpy()
+                cov = self.model.kernel_covar_module(x1_, x2_).evaluate().cpu().numpy()
 
-            cov += process_variance(len(cov), var)
+            if white_noise_var is not None:
+                cov += np.diag(white_noise_var)
             
             # for training data, add likelihood variance
             if add_likelihood_var:
@@ -221,9 +222,9 @@ class ExactGPModel(gpytorch.models.ExactGP):
             self.kernel_covar_module = ScaleKernel(RBFKernel(ard_num_dims=ard_num_dims))
             # self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel == 'matern':
-            self.kernel_covar_module = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims)
+            self.kernel_covar_module = ScaleKernel(MaternKernel(nu=1.5, ard_num_dims=ard_num_dims))
         elif kernel == 'spectral_mixture':
-            self.kernel_covar_module = SpectralMixtureKernel(n_mixtures=kernel_params['n_mixtures'], n_dims=train_x.size(-1))
+            self.kernel_covar_module = SpectralMixtureKernel(num_mixtures=kernel_params['n_mixtures'], ard_num_dims=train_x.size(-1))
             self.kernel_covar_module.initialize_from_data(train_x, train_y)
         else:
             raise NotImplementedError

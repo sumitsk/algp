@@ -216,7 +216,6 @@ class Map(object):
 
 if __name__ == '__main__':
     smap = Map(num_gp_rows=15, num_gp_cols=15, num_row_passes=2, row_pass_width=1)
-    ipdb.set_trace()
     # waypoints = [(7,6), (15,16), (11,10), (5,10)]
     # for w in waypoints:
     #     print(w, smap.map_pose_to_gp_pose(w), smap.occupied[w])

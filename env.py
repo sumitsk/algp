@@ -1,18 +1,18 @@
 import numpy as np
-import ipdb
+import seaborn as sns
+import time
+import matplotlib.pyplot as plt
+from networkx import nx
+from copy import deepcopy
 
 from map import Map
 from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance, generate_phenotype_data
-from networkx import nx
-from copy import deepcopy
 from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node, lower_bound_path_cost
-import matplotlib.pyplot as plt
-import seaborn as sns
-import time
           
+import ipdb
 
 class FieldEnv(object):
-    def __init__(self, data_file=None, phenotype='plant_count', extra_features=[], num_test=40):
+    def __init__(self, data_file=None, phenotype='plant_count', num_test=40):
         super(FieldEnv, self).__init__()
         if data_file is None:
             self.num_rows = 25
@@ -36,8 +36,10 @@ class FieldEnv(object):
 
             # for sorghum dataset
             else: 
-                # extra_features = ['leaf_fill', 'grvi']
-                self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, extra_input_features=extra_features, max_range=25)
+                extra_features = ['leaf_fill', 'grvi']
+                self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, max_range=25, 
+                                                                           extra_input_features=extra_features)
+                # y = np.log(y)
                 # y = zero_mean_unit_variance(y)
                 self._setup(x, y, num_test)
                 self._place_samples_pheno()
@@ -98,9 +100,9 @@ class FieldEnv(object):
             row += row_inc
             
     def collect_samples(self, indices, noise_std):
-        y = self.Y[indices] + np.random.normal(0, noise_std, size=len(indices))
+        y = self.Y[indices] + np.random.normal(0, noise_std)
         # truncating negative values to 0
-        y[y<0] = 0
+        y = max(0,y)
         return y
 
     def _setup_graph(self):
@@ -180,7 +182,7 @@ class FieldEnv(object):
     def _post_search(self):
         self.graph = deepcopy(self.backup_graph)
 
-    def get_shortest_path_waypoints(self, start, heading, waypoints, heuristic_cost=None, slack=0):
+    def get_all_paths(self, start, heading, waypoints, heuristic_cost=None, slack=0):
         self._pre_search(start, waypoints)
 
         # start_time = time.time()
@@ -235,6 +237,7 @@ class FieldEnv(object):
                     continue
                 
                 # NOTE: because of gp_indices computation, this is slow
+                # with the new method, this can be uncommented for further tree pruning
                 # action = self.node_action(tree, new_tree_node, tree_node, parent_idx)
                 # if action == 'continue':
                 #     count_skipped += 1
@@ -264,7 +267,7 @@ class FieldEnv(object):
         # end_time = time.time()
         # print('Time {:4f}'.format(end_time-start_time))
 
-        start_time = time.time()
+        # start_time = time.time()
         all_paths = []
         all_paths_indices = []
         all_paths_cost = []
@@ -285,8 +288,8 @@ class FieldEnv(object):
                 
                 all_paths.append(locs)
                 
-        end_time = time.time()
-        print('Time {:4f}'.format(end_time-start_time))
+        # end_time = time.time()
+        # print('Time {:4f}'.format(end_time-start_time))
 
         # print(count_merged)
         # print(count_skipped)
@@ -357,7 +360,7 @@ class FieldEnv(object):
                 if sum(new_visited) == nw:
                     if new_gval <= least_cost:
                         least_cost = new_gval
-                        best_idx = idx
+                        # best_idx = idx
 
                     closed_list.append(idx)
                 else:
@@ -473,12 +476,13 @@ class FieldEnv(object):
 
         if self.fig is None:
             plt.ion()
-            self.fig, self.ax = plt.subplots(ncols=num_axes, figsize=(4*num_axes, 6))
+            self.fig, self.ax = plt.subplots(ncols=num_axes, figsize=(4*num_axes, 4))
             self.ax = [self.ax] if num_axes==1 else self.ax.flatten()
             # clear all ticks
             for ax_ in self.ax:
                 ax_.get_xaxis().set_visible(False)
                 ax_.get_yaxis().set_visible(False)
+            ipdb.set_trace()
         else:
             # clear all axes
             for ax_ in self.ax:
@@ -486,42 +490,23 @@ class FieldEnv(object):
 
         self.render_map(self.ax[0], next_path_waypoints, all_paths, next_static_locations, all_static_locations)
         if num_axes == 3:
-            self.ax[0].set_title('Environment')
-            self.ax[1].set_title('Predicted values')
-            self.ax[1].imshow(pred)
-            # sns.heatmap(pred, ax=self.ax[1], cbar=False, square=False)
-            self.ax[2].set_title('Ground truth (Actual values)')
-            self.ax[2].imshow(true)
-            # sns.heatmap(true, ax=self.ax[2], cbar=False, square=False)
+            sz = 15
+            self.ax[0].set_title('Field Environment', fontsize=sz)
+            self.ax[1].set_title('Predicted Phenotype distribution', fontsize=sz)
+            self.ax[2].set_title('Actual Phenotype distribution', fontsize=sz)
+            vmin = true.min()
+            vmax = true.max()
+            # TODO: colorbar is not cleared when .cla() is called
+            sns.heatmap(pred, ax=self.ax[1], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
+            sns.heatmap(true, ax=self.ax[2], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
         plt.pause(1)
 
 
 if __name__ == '__main__':
-    # env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')
-    
+    # env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')    
     # env = FieldEnv(data_file='data/july_data.pkl')
     env = FieldEnv()
-    # pose = (3,38)
-    # heading = (-1,0)
-    # waypoints = [(5,22), (4,44), (2,38), (1,22), (7,22)]
 
-    # pose = (7,64)
-    # heading = (-1,0)
-    # waypoints = [(13,56), (8,8), (10,8), (7,38), (1,40)]
-
-    # pose = (1,6)
-    # heading = (-1,0)
-    # waypoints = [(5,6), (2,46), (7,46), (17,42)]
-
-    # pose = (2,2)
-    # heading = (1,0)
-    # waypoints = [(1,4), (9,4)]
-
-    # pose = (0,0)
-    # heading = (1,0)
-    # waypoints = [(1,0), (19,19), (16,18), (27,2)]
-
-    ipdb.set_trace()
     pose = (25,4)
     heading = (1,0)
     waypoints = [(27,19), (29,19)]
@@ -530,7 +515,7 @@ if __name__ == '__main__':
     
     start = time.time()
     slack = 0
-    paths, indices, costs = env.get_shortest_path_waypoints(pose, heading, waypoints, least_cost_ub, slack)
+    paths, indices, costs = env.get_all_paths(pose, heading, waypoints, least_cost_ub, slack)
     end = time.time()
     print('Time consumed: {:4f}'.format(end-start))
     ipdb.set_trace()   
