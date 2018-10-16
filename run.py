@@ -157,6 +157,8 @@ if __name__ == '__main__':
     x = [initial_samples] + list(np.arange(start, start+k*num_naive_runs, k))
     x = np.stack([x for _ in range(nsims)]).flatten()
     ys = [np.stack(res).flatten() for res in error_results]
+
+    # test error
     dct_err = {'x': x}
     for y, lbl in zip(ys, strategies):
         dct_err[lbl] = y
@@ -167,6 +169,8 @@ if __name__ == '__main__':
     ci = 50
     generate_lineplots(df_err, x='x', xlabel=xlabel, ylabel=ylabel, legends=strategies, ci=ci)
     
+    # There dataframes are not necessary to store 
+    # test mean variance
     dct_var = {'x': x}
     varss = [np.stack(res).flatten() for res in var_results]
     for y, lbl in zip(varss, strategies):
@@ -175,6 +179,16 @@ if __name__ == '__main__':
     ylabel_var = 'Test Mean Variance'
     generate_lineplots(df_var, x='x', xlabel=xlabel, ylabel=ylabel_var, legends=strategies, ci=ci)
 
+    # mutual information
+    dct_mi = {'x': x}
+    mis = [np.stack(res).flatten() for res in mi_results]
+    for y, lbl in zip(mis, strategies):
+        dct_mi[lbl] = y
+    df_mi = pd.DataFrame.from_dict(dct_mi)
+    ylabel_mi = 'Mutual Information'
+    generate_lineplots(df_mi, x='x', xlabel=xlabel, ylabel=ylabel_mi, legends=strategies, ci=ci)
+    
+    params = dict(master.gp.model.named_parameters())
     ipdb.set_trace()
 
 
