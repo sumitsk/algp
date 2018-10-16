@@ -6,7 +6,7 @@ from pprint import pprint
 from env import FieldEnv
 from agent import Agent
 from arguments import get_args
-from utils import compute_metric, normal_dist_kldiv, generate_lineplots
+from utils import normal_dist_kldiv, generate_lineplots, compute_mae
 # from methods import ground_truth
 import ipdb
 
@@ -111,62 +111,74 @@ def snr_test(args):
 if __name__ == '__main__':
     args = get_args()
     # snr_test(args)
-    
-    results_maxent = []
-    results_naive_static = []
-    results_naive_mobile = []
-    results_shortest = []
-    results_equi_sample =[]
+    strategies = ['MaxEnt', 'Shortest', 'Equi-Sample', 'Naive Static', 'Naive Mobile']
+    ipp_strategies = ['MaxEnt', 'Shortest', 'Equi-Sample']
+    naive_strategies = ['Naive Static', 'Naive Mobile']
+    num_strategies = len(strategies)
 
     nsims = 10
     k = 10
-    num_naive_runs = 20
+    num_naive_runs = 25
     disp = False
-    for i in range(nsims):
+    initial_samples = 5
+
+    error_results = [[] for _ in range(num_strategies)]
+    mi_results = [[] for _ in range(num_strategies)]
+    var_results = [[] for _ in range(num_strategies)]
+    
+    for t in range(nsims):
         env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
-        master = Agent(env, args)
-        # master.pilot_survey(num_samples=k, std=master.static_std)
-        
+        master = Agent(env, args, static_std=args.static_std, mobile_std=10*args.static_std)
+        master.reset()
+        master.pilot_survey(num_samples=initial_samples, std=master.static_std)
+        mu, cov, zero_mi = master.predict(x=env.test_X, return_cov=True, return_mi=True)
+        zero_error = compute_mae(mu, env.test_Y)
+        zero_mean_var = np.diag(cov).mean()
+
         # It is not necessary to make separate agents but is useful for debugging purposes
-        agent_maxent = Agent(env, args, parent_agent=master)
-        agent_shortest = Agent(env, args, parent_agent=master)
-        agent_equi_sample = Agent(env, args, parent_agent=master)
-        agent_naive_static = Agent(env, args, parent_agent=master)
-        agent_naive_mobile = Agent(env, args, parent_agent=master)
-
-        res_maxent = agent_maxent.run_ipp(num_runs=args.num_runs, strategy='MaxEnt', disp=disp) 
-        res_shortest = agent_shortest.run_ipp(num_runs=args.num_runs, strategy='Shortest', disp=disp)
-        res_equi_sample = agent_equi_sample.run_ipp(num_runs=args.num_runs, strategy='Equi-sample', disp=disp)
-        res_naive_static = agent_naive_static.run_naive(std=master.static_std, counts=[k]*num_naive_runs, metric='distance')
-        res_naive_mobile = agent_naive_mobile.run_naive(std=master.mobile_std, counts=[k]*num_naive_runs, metric='distance')
+        agents = [Agent(env, args, parent_agent=master) for _ in range(num_strategies)]
         
-        # RMSE v/s distance travelled
-        rmse_maxent, mi_maxent = agent_maxent.prediction_vs_distance(k=k, num_runs=num_naive_runs)
-        rmse_shortest, mi_shortest = agent_shortest.prediction_vs_distance(k=k, num_runs=num_naive_runs)
-        rmse_equi_sample, mi_equi_sample = agent_equi_sample.prediction_vs_distance(k=k, num_runs=num_naive_runs)
+        for i in range(num_strategies):
+            if strategies[i] in ipp_strategies:
+                res = agents[i].run_ipp(num_runs=args.num_runs, strategy=strategies[i], disp=disp)
+                res = agents[i].prediction_vs_distance(k=k, num_runs=num_naive_runs)
+            elif strategies[i] in naive_strategies:
+                std = master.static_std if 'Static' in strategies[i] else master.mobile_std
+                res = agents[i].run_naive(std=std, counts=[k]*num_naive_runs, metric='distance')
+            else:
+                raise NotImplementedError
+            error_results[i].append([zero_error] + res['error'])
+            mi_results[i].append([zero_mi] + res['mi'])
+            var_results[i].append([zero_mean_var] + res['mean_var'])
 
-        results_maxent.append(rmse_maxent)
-        results_shortest.append(rmse_shortest)
-        results_equi_sample.append(rmse_equi_sample)
-        results_naive_static.append(res_naive_static['rmse'])
-        results_naive_mobile.append(res_naive_mobile['rmse'])
-
-        ipdb.set_trace()
-
-    # TODO: make all curves start at the same test RMSE
     # TODO: apart from test RMSE, also use MI (both remaining training set and test set) for comparison
-    # NOTE: in some cases, there is significant difference between MaxEnt and two naive baselines
 
     start = k
-    x = np.arange(start, start+k*num_naive_runs, k)
+    x = [initial_samples] + list(np.arange(start, start+k*num_naive_runs, k))
     x = np.stack([x for _ in range(nsims)]).flatten()
-    ys = [np.stack(results_maxent).flatten(), np.stack(results_shortest).flatten(), np.stack(results_equi_sample).flatten(),
-          np.stack(results_naive_static).flatten(), np.stack(results_naive_mobile).flatten()]
+    ys = [np.stack(res).flatten() for res in error_results]
+    dct_err = {'x': x}
+    for y, lbl in zip(ys, strategies):
+        dct_err[lbl] = y
+    df_err = pd.DataFrame.from_dict(dct_err)
+
     xlabel = 'Distance travelled'
-    ylabel = 'Test RMSE'
-    legends = ['MaxEnt', 'Shortest', 'Equi-Sample', 'Naive Static', 'Naive Mobile']
+    ylabel = 'Test MAE'
     ci = 50
-    generate_lineplots(x, ys, xlabel=xlabel, ylabel=ylabel, legends=legends, ci=ci)
+    generate_lineplots(df_err, x='x', xlabel=xlabel, ylabel=ylabel, legends=strategies, ci=ci)
+    
+    dct_var = {'x': x}
+    varss = [np.stack(res).flatten() for res in var_results]
+    for y, lbl in zip(varss, strategies):
+        dct_var[lbl] = y
+    df_var = pd.DataFrame.from_dict(dct_var)
+    ylabel_var = 'Test Mean Variance'
+    generate_lineplots(df_var, x='x', xlabel=xlabel, ylabel=ylabel_var, legends=strategies, ci=ci)
+
+    ipdb.set_trace()
+
+
+
 
 
 

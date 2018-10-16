@@ -37,10 +37,11 @@ class FieldEnv(object):
             # for sorghum dataset
             else: 
                 extra_features = ['leaf_fill', 'grvi']
+                # extra_features = ['leaf_fill', 'grvi', 'plant_count']
                 self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, max_range=25, 
                                                                            extra_input_features=extra_features)
                 # y = np.log(y)
-                # y = zero_mean_unit_variance(y)
+                # y = zero_mean_unit_variance(y, mean=0)
                 self._setup(x, y, num_test)
                 self._place_samples_pheno()
 
@@ -482,7 +483,6 @@ class FieldEnv(object):
             for ax_ in self.ax:
                 ax_.get_xaxis().set_visible(False)
                 ax_.get_yaxis().set_visible(False)
-            ipdb.set_trace()
         else:
             # clear all axes
             for ax_ in self.ax:

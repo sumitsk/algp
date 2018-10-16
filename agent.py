@@ -1,10 +1,11 @@
 import numpy as np
 import torch 
 import time
+from copy import deepcopy
 
 from models import GPR
 from graph_utils import get_heading
-from utils import entropy_from_cov, compute_rmse, predictive_distribution, find_shortest_path, find_equi_sample_path
+from utils import entropy_from_cov, compute_mae, predictive_distribution, find_shortest_path, find_equi_sample_path
 import ipdb
 
 
@@ -18,7 +19,7 @@ class Agent(object):
         self._init_model(args)
 
         self.static_std = args.static_std if static_std is None else static_std
-        self.mobile_std = 5*self.static_std if mobile_std is None else mobile_std
+        self.mobile_std = 10*self.static_std if mobile_std is None else mobile_std
         self.num_samples_per_batch = args.num_samples_per_batch
         self.update_every = args.update_every
         
@@ -29,6 +30,9 @@ class Agent(object):
             self._pre_train(num_samples=num_pretrain)
         else:
             self.load_model(parent_agent)
+            self.static_data = deepcopy(parent_agent.static_data)
+            self.mobile_data = deepcopy(parent_agent.mobile_data)
+            self.collected = deepcopy(parent_agent.collected)
 
     def _init_model(self, args):
         kernel_params = {'type': args.kernel}
@@ -57,9 +61,7 @@ class Agent(object):
         print('--- Pretraining ---')
         self.pilot_survey(num_samples, self.static_std)
         self.update_model()
-        # if don't want to remember/condition on pre_train data points    
-        # self.reset()    
-
+        
     def pilot_survey(self, num_samples, std):
         ind = np.random.permutation(self.env.num_samples)[:num_samples]
         self._add_samples(ind, stds=[std]*num_samples)
@@ -119,17 +121,17 @@ class Agent(object):
 
     def _setup_ipp(self, criterion, update):
         self.criterion = criterion
-        if not update:
-            self.reset()
+        # if not update:
+        #     self.reset()
         self._post_update()
 
     def run_ipp(self, render=False, num_runs=10, criterion='entropy', mobile_enabled=True, update=False, slack=0, strategy='MaxEnt', disp=True):
         # informative path planner
-        assert strategy in ['MaxEnt', 'Shortest', 'Equi-sample'], 'Unknown strategy!!'
+        assert strategy in ['MaxEnt', 'Shortest', 'Equi-Sample'], 'Unknown strategy!!'
         assert criterion in ['entropy', 'mutual_information'], 'Unknown criterion!!'
         self._setup_ipp(criterion, update)
 
-        test_rmse = []
+        test_error = []
 
         for i in range(num_runs):
             if disp:
@@ -168,7 +170,7 @@ class Agent(object):
                     best_idx = find_shortest_path(paths_cost)
                 else:
                     best_idx = self.best_path(paths_indices, new_gp_indices)
-                    if strategy == 'Equi-sample':
+                    if strategy == 'Equi-Sample':
                         best_idx = find_equi_sample_path(paths_indices, best_idx)
                 end = time.time()
 
@@ -197,6 +199,7 @@ class Agent(object):
             self._add_samples(next_path_indices, stds)
             
             # update hyperparameters of GP model
+            # TODO: this may not work properly right now
             if update and (i+1) % self.update_every == 0:
                 if disp:
                     print('\n---------- Updating model --------------')
@@ -212,11 +215,11 @@ class Agent(object):
                 print('\n-------- Prediction -------------- ')
             start = time.time()
             pred, var = self.predict(return_var=True)
-            rmse = compute_rmse(self.env.test_Y, pred)
-            test_rmse.append(rmse)
+            error = compute_mae(self.env.test_Y, pred)
+            test_error.append(error)
             end = time.time()
             if disp:
-                print('Test RMSE: {:.4f}'.format(rmse))
+                print('Test ERROR: {:.4f}'.format(error))
                 print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
                 print('Time consumed {:.4f}'.format(end - start))
 
@@ -227,9 +230,9 @@ class Agent(object):
         print('==========================================================')
         print('Strategy: {:s}'.format(strategy))
         print('--- Final statistics --- ')
-        print('Test RMSE: {:.4f}'.format(rmse))
+        print('Test ERROR: {:.4f}'.format(error))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-        results = {'mean': pred, 'rmse':test_rmse}
+        results = {'mean': pred, 'error':test_error}
         return results
 
     # def predict_train(self, test_ind=None):
@@ -366,9 +369,9 @@ class Agent(object):
         # counts should be list of ints
         # metric - either distance or sample
 
-        self.reset()
-        test_rmse = []
+        test_error = []
         all_mi = []
+        all_var = []
 
         for ns in counts:
             inds = []
@@ -414,18 +417,19 @@ class Agent(object):
 
             self._add_samples(inds, [std]*len(inds))
             mu, cov, mi = self.predict(return_cov=True, return_mi=True)
-            rmse = compute_rmse(self.env.test_Y, mu)
-            test_rmse.append(rmse)
+            error = compute_mae(self.env.test_Y, mu)
+            test_error.append(error)
             all_mi.append(mi)
+            all_var.append(np.diag(cov).mean())
 
         var = np.diag(cov)
         strategy = 'Naive Static' if std==self.static_std else 'Naive Mobile'
         print('==========================================================')
         print('Strategy: ', strategy)
         print('--- Final statistics --- ')
-        print('Test RMSE: {:.4f}'.format(rmse))
+        print('Test ERROR: {:.4f}'.format(error))
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
-        results = {'mean': mu, 'rmse': test_rmse, 'mi': all_mi}
+        results = {'mean': mu, 'error': test_error, 'mi': all_mi, 'mean_var': all_var}
         return results
 
     def get_samples_sequence_from_path(self, path, waypoints):
@@ -452,14 +456,16 @@ class Agent(object):
 
     def prediction_vs_distance(self, k, num_runs):
         count = 0
-        all_rmse = []
+        all_error = []
         all_mi = []
+        all_var = []
 
         while count < k*num_runs:
             count += k
             inds = np.array(self.collected['ind'][:count])
             valid = inds!=-1
 
+            # 
             if sum(valid)==0:
                 mu = np.zeros(len(self.env.test_Y))
                 mi = 0
@@ -467,8 +473,10 @@ class Agent(object):
                 x = self.env.X[inds[valid]]
                 var = np.array(self.collected['std'])[:count][valid]**2
                 y = np.array(self.collected['y'])[:count][valid]
-                mu, mi = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True)            
-            rmse = compute_rmse(self.env.test_Y, mu)
-            all_rmse.append(rmse)
+                mu, cov, mi = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True, return_cov=True)            
+            error = compute_mae(self.env.test_Y, mu)
+            all_error.append(error)
             all_mi.append(mi)
-        return all_rmse, all_mi
+            all_var.append(np.diag(cov).mean())
+        results = {'mean': mu, 'error': all_error, 'mi': all_mi, 'mean_var': all_var}
+        return results

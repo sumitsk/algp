@@ -339,24 +339,21 @@ def draw_path(ax, path, head_width=None, head_length=None, linewidth=None, delta
                  linewidth=linewidth, color=arrow_color, alpha=1)
 
 
-def generate_lineplots(x, ys, xlabel=None, ylabel=None, legends=None, ci=95):
+def generate_lineplots(df, x, xlabel=None, ylabel=None, legends=None, ci=95):
     # geneate a seaborn lineplot with confidence interval 
     # ys - list of y values
     xlabel = 'x' if xlabel is None else xlabel
     ylabel = 'y' if ylabel is None else ylabel
-    legends = ['y' + str(i) for i in range(1,len(ys)+1)] if legends is None else legends
+    legends = ['y' + str(i) for i in range(1,len(df))] if legends is None else legends
     
-    dct = {xlabel: x}
-    for y, lbl in zip(ys, legends):
-        dct[lbl] = y
-    df = pd.DataFrame.from_dict(dct)
-
     fig, ax = plt.subplots(1,1)
     for lbl in legends:
-        ax = sns.lineplot(x=xlabel, y=lbl, data=df, label=lbl, ax=ax, ci=ci)
+        ax = sns.lineplot(x=x, y=lbl, data=df, label=lbl, ax=ax, ci=ci, markers=True)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.legend()
+    xvals = df[['x']].values.squeeze()
+    ax.set_xlim([xvals.min(), xvals.max()])
     plt.show()
 
 
