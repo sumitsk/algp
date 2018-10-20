@@ -2,6 +2,7 @@ data/
 outputs/
 data_analysis/
 exps/ 
+images/
 
 configure_data.py
 multi_task_models.py

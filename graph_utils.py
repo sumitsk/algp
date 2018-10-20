@@ -1,6 +1,7 @@
 import numpy as np
-import ipdb
 from utils import manhattan_distance
+
+# import ipdb
 
 
 def edge_cost(node, heading, next_node):
@@ -127,8 +128,8 @@ def path_cost(path):
 def find_merge_to_node(tree, node):
     # all nodes in the graph with same attributes as node
     all_nodes = [n for n in tree.nodes() if tree.node[n]==node]
-    if len(all_nodes) > 1:
-        ipdb.set_trace()
+    # if len(all_nodes) > 1:
+    #     ipdb.set_trace()
     if len(all_nodes) > 0:
         return all_nodes[0]
     return None   

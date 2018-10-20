@@ -1,7 +1,7 @@
 import numpy as np
 from utils import manhattan_distance
 from graph_utils import get_heading, opposite_headings
-import ipdb
+# import ipdb
 
 
 class Map(object):
@@ -212,16 +212,3 @@ class Map(object):
             heading = all_final_headings[idx]
             visited[idx] = True
         return total_cost
-
-
-if __name__ == '__main__':
-    smap = Map(num_gp_rows=15, num_gp_cols=15, num_row_passes=2, row_pass_width=1)
-    # waypoints = [(7,6), (15,16), (11,10), (5,10)]
-    # for w in waypoints:
-    #     print(w, smap.map_pose_to_gp_pose(w), smap.occupied[w])
-    
-    # start = (0,0)
-    # heading = (1,0)
-    # path_length = smap.nearest_waypoint_path_cost(start, heading, waypoints)
-
-

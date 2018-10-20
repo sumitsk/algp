@@ -26,7 +26,6 @@ def get_args():
     parser.add_argument('--update', action='store_true', help='update gp model')
     parser.add_argument('--update_every', default=1, type=int, help='update gp model every ... batch')
     parser.add_argument('--criterion', default='entropy', help='one from {mutual_information, entropy}')
-    parser.add_argument('--mobile_enabled', action='store_true', help='include mobile measurements')
     # parser.add_argument('--mobile_std', default=.5, type=float, help='standard deviation of mobile measurements')
     parser.add_argument('--static_std', default=.1, type=float, help='standard deviation of static measurements')
     

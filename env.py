@@ -6,10 +6,10 @@ from networkx import nx
 from copy import deepcopy
 
 from map import Map
-from utils import zero_mean_unit_variance, is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance, generate_phenotype_data
+from utils import is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance, generate_phenotype_data
 from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node, lower_bound_path_cost
           
-import ipdb
+# import ipdb
 
 class FieldEnv(object):
     def __init__(self, data_file=None, phenotype='plant_count', num_test=40):
@@ -37,11 +37,8 @@ class FieldEnv(object):
             # for sorghum dataset
             else: 
                 extra_features = ['leaf_fill', 'grvi']
-                # extra_features = ['leaf_fill', 'grvi', 'plant_count']
                 self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, max_range=25, 
                                                                            extra_input_features=extra_features)
-                # y = np.log(y)
-                # y = zero_mean_unit_variance(y, mean=0)
                 self._setup(x, y, num_test)
                 self._place_samples_pheno()
 
@@ -500,22 +497,3 @@ class FieldEnv(object):
             sns.heatmap(pred, ax=self.ax[1], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
             sns.heatmap(true, ax=self.ax[2], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
         plt.pause(1)
-
-
-if __name__ == '__main__':
-    # env = FieldEnv(data_file='data/female_gene_data/all_mean25.pkl')    
-    # env = FieldEnv(data_file='data/july_data.pkl')
-    env = FieldEnv()
-
-    pose = (25,4)
-    heading = (1,0)
-    waypoints = [(27,19), (29,19)]
-
-    least_cost_ub = env.get_heuristic_cost(pose, heading, waypoints)
-    
-    start = time.time()
-    slack = 0
-    paths, indices, costs = env.get_all_paths(pose, heading, waypoints, least_cost_ub, slack)
-    end = time.time()
-    print('Time consumed: {:4f}'.format(end-start))
-    ipdb.set_trace()   

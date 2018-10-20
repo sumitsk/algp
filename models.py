@@ -9,13 +9,12 @@ from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.distributions import MultivariateNormal
 
 from utils import to_torch, to_numpy
-import ipdb
+# import ipdb
 
 
 class IdentityLatentFunction(nn.Module):
     def __init__(self):
         super(IdentityLatentFunction, self).__init__()
-        # self.apply(weights_init)
         self.embed_dim = None
 
     def forward(self, x):
@@ -27,7 +26,6 @@ class LinearLatentFunction(nn.Module):
         super(LinearLatentFunction, self).__init__()
         self.fc = nn.Linear(input_dim, embed_dim)
         self.embed_dim = embed_dim
-        # self.apply(weights_init)
 
     def forward(self, x):
         return self.fc(x)
@@ -39,7 +37,6 @@ class NonLinearLatentFunction(nn.Module):
         self.fc1 = nn.Linear(input_dim, f1_dim, bias=False)
         self.fc2 = nn.Linear(f1_dim, embed_dim, bias=False)
         self.embed_dim = embed_dim
-        # self.apply(weights_init)
 
     def forward(self, inp):
         x = F.tanh(self.fc1(inp))
@@ -119,8 +116,8 @@ class GPR(object):
 
     def reset(self, x, y, var):
         self.set_train_data(x, y, var)
-        # self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
-        self.likelihood = GaussianLikelihood()
+        self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
+        # self.likelihood = GaussianLikelihood()
         self.model = ExactGPModel(self._train_x, self._zero_mean_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
@@ -144,7 +141,6 @@ class GPR(object):
         self.model.train()
         self.likelihood.train()
         
-        # NOTE: with zero mean and low range observation (0-1 types), loss stabilises
         losses = []
         for i in range(self.max_iter):
             self.optimizer.zero_grad()
@@ -220,7 +216,6 @@ class ExactGPModel(gpytorch.models.ExactGP):
         kernel = kernel_params['type'] if kernel_params is not None else 'rbf'
         if kernel is None or kernel == 'rbf':
             self.kernel_covar_module = ScaleKernel(RBFKernel(ard_num_dims=ard_num_dims))
-            # self.kernel_covar_module = RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel == 'matern':
             self.kernel_covar_module = ScaleKernel(MaternKernel(nu=1.5, ard_num_dims=ard_num_dims))
         elif kernel == 'spectral_mixture':

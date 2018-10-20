@@ -6,15 +6,13 @@ from copy import deepcopy
 from models import GPR
 from graph_utils import get_heading
 from utils import entropy_from_cov, compute_mae, predictive_distribution, find_shortest_path, find_equi_sample_path
-import ipdb
+# import ipdb
 
 
 class Agent(object):
     def __init__(self, env, args, parent_agent=None, learn_likelihood_noise=True, mobile_std=None, static_std=None):
         super()
         self.env = env
-        # NOTE: the current GPytorch version (by default) will learn the likelihood noise
-        # TODO: modify GaussianLikelihood to fix measurement noise
         self.learn_likelihood_noise = learn_likelihood_noise
         self._init_model(args)
 
@@ -34,10 +32,10 @@ class Agent(object):
             self.mobile_data = deepcopy(parent_agent.mobile_data)
             self.collected = deepcopy(parent_agent.collected)
 
+            
     def _init_model(self, args):
         kernel_params = {'type': args.kernel}
-        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params,
-                      learn_likelihood_noise=self.learn_likelihood_noise)
+        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params, learn_likelihood_noise=self.learn_likelihood_noise)
 
     def load_model(self, parent_agent):
         self.gp.reset(parent_agent.gp.train_x, parent_agent.gp.train_y, parent_agent.gp.train_var)
@@ -235,19 +233,6 @@ class Agent(object):
         results = {'mean': pred, 'error':test_error}
         return results
 
-    # def predict_train(self, test_ind=None):
-    #     test_ind = np.arange(self.env.num_samples) if test_ind is None else test_ind
-    #     train_ind, train_y, train_var = self.get_sampled_dataset()
-
-    #     cov_aa = self.cov_matrix[train_ind].T[train_ind].T + np.diag(train_var)
-    #     cov_xx = self.cov_matrix[test_ind].T[test_ind].T
-    #     cov_xa = self.cov_matrix[test_ind].T[train_ind].T
-
-    #     mat1 = np.dot(cov_xa, np.linalg.inv(cov_aa))
-    #     mu = np.dot(mat1, train_y.reshape(-1,1))
-    #     cov = cov_xx - np.dot(mat1, cov_xa.T)
-    #     return mu, np.diag(cov)
-
     def predict(self, x=None, return_var=False, return_cov=False, return_mi=False):
         x = self.env.test_X if x is None else x
         train_ind, train_y, train_var = self.get_sampled_dataset()
@@ -422,6 +407,8 @@ class Agent(object):
             all_mi.append(mi)
             all_var.append(np.diag(cov).mean())
 
+            # TODO: implement simulation rendering 
+
         var = np.diag(cov)
         strategy = 'Naive Static' if std==self.static_std else 'Naive Mobile'
         print('==========================================================')
@@ -465,15 +452,11 @@ class Agent(object):
             inds = np.array(self.collected['ind'][:count])
             valid = inds!=-1
 
-            # 
-            if sum(valid)==0:
-                mu = np.zeros(len(self.env.test_Y))
-                mi = 0
-            else:
-                x = self.env.X[inds[valid]]
-                var = np.array(self.collected['std'])[:count][valid]**2
-                y = np.array(self.collected['y'])[:count][valid]
-                mu, cov, mi = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True, return_cov=True)            
+            x = self.env.X[inds[valid]]
+            var = np.array(self.collected['std'])[:count][valid]**2
+            y = np.array(self.collected['y'])[:count][valid]
+            mu, cov, mi = predictive_distribution(self.gp, x, y, self.env.test_X, var, return_mi=True, return_cov=True)            
+
             error = compute_mae(self.env.test_Y, mu)
             all_error.append(error)
             all_mi.append(mi)
