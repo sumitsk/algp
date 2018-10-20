@@ -28,8 +28,8 @@ simulates an agent moving in the field to gather samples in an informative manne
 
 For any queries, feel free to raise an issue or contact me at sumitsk@cmu.edu.
 
-<!-- <img width="100" src=images/cmu_logo.png /> -->
-![](images/cmu_logo2.png)
+<img width="100" src=https://www.cmu.edu/marcom/brand-standards/images/logos-colors-type/full-color-seal-min.png />
+<!-- ![](images/cmu_logo2.png) -->
 
 ## License
 
