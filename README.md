@@ -1,5 +1,5 @@
 # Active Learning with Gaussian Processes for Crop Phenotyping
-Plant phenotyping evaluates crops based on physical characteristics to support plant breeding and genetics activities. Since the current standard practice in collecting phenotype data needs human specialists to assess thousands of plants, phenotyping is currently the bottleneck in the plant breeding process. To increase efficiency of phenotyping, high throughput phenotyping (HTP) uses sensors and robotic platforms to gather plant phenotype data. Due to its limited on-board sample storage capacity, time and energy constraints, a robot can not exhaustively collect data from all the plants in a field, but instead has to select the most informative ones to learn the phenotype distribution via statistical models like Gaussian Processes. In this project, we develop an active learning algorithm with Gaussian Processes to enable a robotic system to actively gather measurements from the field without exhaustively covering the entire field. 
+Plant phenotyping evaluates crops based on physical characteristics to support plant breeding and genetics activities. Since the current standard practice in collecting phenotype data needs human specialists to assess thousands of plants, phenotyping is currently the bottleneck in the plant breeding process. To increase efficiency of phenotyping, high throughput phenotyping (HTP) uses sensors and robotic platforms to gather plant phenotype data. However, the current practices involve exhaustive data collection and is time-consuming. In this project, we develop an active learning algorithm with Gaussian Processes to enable a robotic system to actively gather measurements from the field in order to learn the phenotype distribution. 
 
 ## Installation
 
@@ -13,7 +13,7 @@ After installing the listed dependencies, simply clone this package to run exper
 
 ## Getting Started
 
-See `run.py` script to setup a simulation environment and run an agent to collect data adaptively. For example, 
+See `run.py` script to setup a simulation environment and run an agent to adapively collect data and learn the target distribution. For example, 
 
 ```
 python run.py --eval_only --render
@@ -21,7 +21,8 @@ python run.py --eval_only --render
 simulates an agent moving in the field to gather samples in an informative manner. The simulation will use a randomly generated mixture of Gaussian dataset. Please contact us if you need the sorghum field data. 
 
 ## Results
-
+Here is an example simulation video:
+![Active Learing and Planning](images/ipp.gif)
 
 
 ## Contact

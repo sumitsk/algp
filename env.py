@@ -9,7 +9,8 @@ from map import Map
 from utils import is_valid_cell, load_data_from_pickle, draw_path, manhattan_distance, generate_phenotype_data
 from graph_utils import get_down_and_up_nodes, edge_cost, get_heading, find_merge_to_node, lower_bound_path_cost
           
-# import ipdb
+import ipdb
+
 
 class FieldEnv(object):
     def __init__(self, data_file=None, phenotype='plant_count', num_test=40):
@@ -148,7 +149,7 @@ class FieldEnv(object):
         #     else:
         #         colors.append('green')
         # pose = nx.get_node_attributes(self.graph, 'pose')
-        # nx.draw(self.graph, pose, node_color=colors)
+        # nx.draw(self.graph, pose, node_color=colors, width=5)
         # plt.show()
         
     def get_new_nodes_and_edges(self, new_nodes):
@@ -431,18 +432,18 @@ class FieldEnv(object):
 
     def render_map(self, ax, next_path_waypoints, all_paths, next_static_locations, all_static_locations):
         # ax.set_title('Environment')
+        sample_color = np.array([255,218,185])/255
         plot = 1.0 - np.repeat(self.map.occupied[:, :, np.newaxis], 3, axis=2)
         for i in range(plot.shape[0]):
-                for j in range(plot.shape[1]):
-                    if self.map_pose_to_gp_index_matrix[i,j] is not None:
-                        plot[i,j] = np.array([255,218,185])/255
-        
+            for j in range(plot.shape[1]):
+                if self.map_pose_to_gp_index_matrix[i,j] is not None:
+                    plot[i,j] = sample_color
+    
         all_paths_color = np.array([244,164,96])/255
         all_static_locations_color = np.array([127, 255, 0])/255
-        # next_path_color = [.3, .3, .3]
         next_static_locations_color = np.array([0, 100, 0])/255
-        # ipdb.set_trace()
-
+        pose_color = np.array([1,0,0])
+        
         # highlight all mobile samples locations 
         if len(all_paths) > 0:
             plot[all_paths[:, 0], all_paths[:, 1], :] = all_paths_color
@@ -451,20 +452,19 @@ class FieldEnv(object):
         if len(all_static_locations) > 0:
             plot[all_static_locations[:, 0], all_static_locations[:, 1], :] = all_static_locations_color
 
-        # highlight next mobile samples
-        # if len(next_path) > 0:
-        #     plot[next_path[:, 0], next_path[:, 1], :] = next_path_color
-
         # highlight next static samples
         if len(next_static_locations) > 0:
             plot[next_static_locations[:,0], next_static_locations[:,1], :] = next_static_locations_color
 
+        # show the next path
         waypoints = [x[::-1] for x in next_path_waypoints]
         draw_path(ax, waypoints, head_width=0.25, head_length=.2, linewidth=3.0, delta=None, color='green')
 
-        pose = all_paths[-1]
-        plot[pose[0], pose[1], :] = [0, 0, 1]
+        # highlight robot pose
+        pose = next_path_waypoints[0]
+        plot[pose[0], pose[1], :] = pose_color
         ax.imshow(plot)
+        # sns.heatmap(plot, ax=ax, cbar=False)
 
     def render(self, next_path_waypoints, all_paths, next_static_locations, all_static_locations, true=None, pred=None):
         if true is not None and pred is not None:
@@ -480,6 +480,7 @@ class FieldEnv(object):
             for ax_ in self.ax:
                 ax_.get_xaxis().set_visible(False)
                 ax_.get_yaxis().set_visible(False)
+            ipdb.set_trace()
         else:
             # clear all axes
             for ax_ in self.ax:
@@ -494,6 +495,6 @@ class FieldEnv(object):
             vmin = true.min()
             vmax = true.max()
             # TODO: colorbar is not cleared when .cla() is called
-            sns.heatmap(pred, ax=self.ax[1], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
-            sns.heatmap(true, ax=self.ax[2], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False)
+            sns.heatmap(pred, ax=self.ax[1], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False, square=True)
+            sns.heatmap(true, ax=self.ax[2], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False, square=True)
         plt.pause(1)

@@ -24,14 +24,12 @@ class Agent(object):
         self.reset()
         if parent_agent is None:
             num_pretrain = int(args.fraction_pretrain * self.env.num_samples)
-            # num_pretrain = args.num_pretrain
             self._pre_train(num_samples=num_pretrain)
         else:
             self.load_model(parent_agent)
             self.static_data = deepcopy(parent_agent.static_data)
             self.mobile_data = deepcopy(parent_agent.mobile_data)
             self.collected = deepcopy(parent_agent.collected)
-
             
     def _init_model(self, args):
         kernel_params = {'type': args.kernel}
@@ -188,7 +186,8 @@ class Agent(object):
                     pred = self.predict(self.env.all_x).reshape(self.env.shape)
                     true = self.env.all_y.reshape(self.env.shape)
                     self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
-            
+                    # self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
+
             # TODO: a few things need to be done over here to make the else condition compatible 
             else:
                 pass
