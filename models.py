@@ -56,7 +56,7 @@ class NonLinearLatentFunction(nn.Module):
 #         self.v_fc = nn.Linear(self.gene_dim, f1_dim)
 #         self.fc = nn.Linear(2*f1_dim, f2_dim)
 #         # self.apply(weights_init)
-#
+
 #     def forward(self, inp):
 #         # TODO: perhaps too many parameters (might overfit)
 #         inp1, inp2 = torch.split(inp, [self.spatial_dim, self.gene_dim], dim=-1)
@@ -116,8 +116,8 @@ class GPR(object):
 
     def reset(self, x, y, var):
         self.set_train_data(x, y, var)
-        self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
-        # self.likelihood = GaussianLikelihood()
+        # self.likelihood = GaussianLikelihood(learn_noise=self.learn_likelihood_noise)
+        self.likelihood = GaussianLikelihood()
         self.model = ExactGPModel(self._train_x, self._zero_mean_train_y, self.likelihood, self._train_var, self.latent, self.kernel_params, self.latent_params)
         self.optimizer = torch.optim.Adam([{'params': self.model.parameters()}, ], lr=self.lr)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
@@ -218,6 +218,8 @@ class ExactGPModel(gpytorch.models.ExactGP):
             self.kernel_covar_module = ScaleKernel(RBFKernel(ard_num_dims=ard_num_dims))
         elif kernel == 'matern':
             self.kernel_covar_module = ScaleKernel(MaternKernel(nu=1.5, ard_num_dims=ard_num_dims))
+            # without scale kernel: very poor performance
+            # matern 0.5, 1.5 and 2.5 all have similar performance
         elif kernel == 'spectral_mixture':
             self.kernel_covar_module = SpectralMixtureKernel(num_mixtures=kernel_params['n_mixtures'], ard_num_dims=train_x.size(-1))
             self.kernel_covar_module.initialize_from_data(train_x, train_y)

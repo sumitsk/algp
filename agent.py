@@ -121,7 +121,7 @@ class Agent(object):
         #     self.reset()
         self._post_update()
 
-    def run_ipp(self, render=False, num_runs=10, criterion='entropy', mobile_enabled=True, update=False, slack=0, strategy='MaxEnt', disp=True):
+    def run_ipp(self, render=False, num_runs=10, criterion='entropy', update=False, slack=0, strategy='MaxEnt', disp=True):
         # informative path planner
         assert strategy in ['MaxEnt', 'Shortest', 'Equi-Sample'], 'Unknown strategy!!'
         assert criterion in ['entropy', 'mutual_information'], 'Unknown criterion!!'
@@ -143,54 +143,49 @@ class Agent(object):
             self.static_locations = np.concatenate([self.static_locations, next_static_locations]).astype(int)
 
             # Gather data along path 
-            if mobile_enabled:    
-                if disp:      
-                    print('------ Finding valid paths ---------')
-                    print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
-                
-                # find all paths 
-                start = time.time()
-                least_cost_ub = self.env.get_heuristic_cost(self.pose, self.heading, waypoints)
-                if disp:
-                    print('Least cost upper bound:',least_cost_ub)
-                paths_checkpoints, paths_indices, paths_cost = self.env.get_all_paths(self.pose, self.heading, waypoints, least_cost_ub, slack)
-                end = time.time()
-                if disp:
-                    print('Number of feasible paths: ', len(paths_indices))
-                    print('Time consumed {:.4f}'.format(end - start))
-                    print('\n------ Finding best path ----------')
-                
-                # find optimal path
-                start = time.time()
-                if strategy == 'Shortest':
-                    best_idx = find_shortest_path(paths_cost)
-                else:
-                    best_idx = self.best_path(paths_indices, new_gp_indices)
-                    if strategy == 'Equi-Sample':
-                        best_idx = find_equi_sample_path(paths_indices, best_idx)
-                end = time.time()
-
-                if disp:
-                    least_cost = min(paths_cost)
-                    print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
-                    print('Time consumed {:.4f}'.format(end - start))
-                
-                # update agent's record
-                next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))[1:]
-                next_path_indices, stds = self.get_samples_sequence_from_path(next_path, waypoints)
-                self.path = np.concatenate([self.path, next_path], axis=0).astype(int)
-                self.pose = tuple(self.path[-1])
-                self.heading = get_heading(self.path[-2], self.path[-1])
-                
-                if render:
-                    pred = self.predict(self.env.all_x).reshape(self.env.shape)
-                    true = self.env.all_y.reshape(self.env.shape)
-                    self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
-                    # self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
-
-            # TODO: a few things need to be done over here to make the else condition compatible 
+            if disp:      
+                print('------ Finding valid paths ---------')
+                print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
+            
+            # find all paths 
+            start = time.time()
+            least_cost_ub = self.env.get_heuristic_cost(self.pose, self.heading, waypoints)
+            if disp:
+                print('Least cost upper bound:',least_cost_ub)
+            paths_checkpoints, paths_indices, paths_cost = self.env.get_all_paths(self.pose, self.heading, waypoints, least_cost_ub, slack)
+            end = time.time()
+            if disp:
+                print('Number of feasible paths: ', len(paths_indices))
+                print('Time consumed {:.4f}'.format(end - start))
+                print('\n------ Finding best path ----------')
+            
+            # find optimal path
+            start = time.time()
+            if strategy == 'Shortest':
+                best_idx = find_shortest_path(paths_cost)
             else:
-                pass
+                best_idx = self.best_path(paths_indices, new_gp_indices)
+                if strategy == 'Equi-Sample':
+                    best_idx = find_equi_sample_path(paths_indices, best_idx)
+            end = time.time()
+
+            if disp:
+                least_cost = min(paths_cost)
+                print('Least cost: {} Best path cost: {}'.format(least_cost, paths_cost[best_idx]))
+                print('Time consumed {:.4f}'.format(end - start))
+            
+            # update agent's record
+            next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))[1:]
+            next_path_indices, stds = self.get_samples_sequence_from_path(next_path, waypoints)
+            self.path = np.concatenate([self.path, next_path], axis=0).astype(int)
+            self.pose = tuple(self.path[-1])
+            self.heading = get_heading(self.path[-2], self.path[-1])
+            
+            if render:
+                pred = self.predict(self.env.all_x).reshape(self.env.shape)
+                true = self.env.all_y.reshape(self.env.shape)
+                # self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
+                self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
 
             # gather samples
             self._add_samples(next_path_indices, stds)

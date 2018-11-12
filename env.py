@@ -145,7 +145,7 @@ class FieldEnv(object):
         # colors = []
         # for n in self.graph:
         #     if self.graph.node[n]['new'] == 'False':
-        #         colors.append('purple')
+        #         colors.append('darkorange')
         #     else:
         #         colors.append('green')
         # pose = nx.get_node_attributes(self.graph, 'pose')

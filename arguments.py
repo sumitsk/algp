@@ -12,7 +12,7 @@ def get_args():
     parser.add_argument('--max_iterations', default=200, type=int, help='number of training iterations for GP model')
     parser.add_argument('--data_file', default=None, help='pickle file to load data from')
     parser.add_argument('--phenotype', default='plant_height', help='target feature')
-    parser.add_argument('--kernel', default='rbf', help='kernel of GP model {rbf, matern}')
+    parser.add_argument('--kernel', default='matern', help='kernel of GP model {rbf, matern}')
     # parser.add_argument('--n_mixtures', default=4, help='number of spectral mixture components')
     parser.add_argument('--latent', default=None, help='latent function in GP model')
     
