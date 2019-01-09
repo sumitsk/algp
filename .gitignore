@@ -3,6 +3,8 @@ outputs/
 data_analysis/
 exps/ 
 images/
+paper/
+rebuttal/
 
 configure_data.py
 multi_task_models.py

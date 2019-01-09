@@ -6,10 +6,21 @@ from env import FieldEnv
 from agent import Agent
 from arguments import get_args
 from utils import generate_lineplots, compute_mae
-# import ipdb
+import ipdb
 
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 22})
+
+
+
+def path_to_sample_count(env, path):
+    indices = [env.map_pose_to_gp_index_matrix[tuple(p)] for p in path]
+    is_sample = np.array(indices)!=None 
+    sample_count = np.full(len(path), 0)
+    sample_count[0] = is_sample[0]
+    for i in range(1, len(path)):
+        sample_count[i] = sample_count[i-1] + is_sample[i]
+    return sample_count
 
 
 def snr_test(args):
@@ -36,9 +47,10 @@ def compare_all_strategies(args):
     naive_strategies = ['Naive Static', 'Naive Mobile']
     num_strategies = len(strategies)
 
-    nsims = 20
-    k = 10
+    nsims = 10
+    test_every = 10
     num_naive_runs = 20
+    max_dist = test_every * num_naive_runs
     disp = False
     # set some initial samples
     initial_samples = 5
@@ -46,6 +58,7 @@ def compare_all_strategies(args):
     error_results = [[] for _ in range(num_strategies)]
     mi_results = [[] for _ in range(num_strategies)]
     var_results = [[] for _ in range(num_strategies)]
+    sample_count = [[] for _ in range(num_strategies)]
     noise_ratio = 5
     for t in range(nsims):
         env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
@@ -61,20 +74,22 @@ def compare_all_strategies(args):
         
         for i in range(num_strategies):
             if strategies[i] in ipp_strategies:
-                res = agents[i].run_ipp(num_runs=args.num_runs, strategy=strategies[i], disp=disp)
-                res = agents[i].prediction_vs_distance(k=k, num_runs=num_naive_runs)
+                # res = agents[i].run_ipp(num_runs=args.num_runs, strategy=strategies[i], disp=disp)
+                res = agents[i].run_greedy_ipp(num_runs=args.num_runs, strategy=strategies[i], disp=disp)
+                res = agents[i].prediction_vs_distance(test_every=test_every, num_runs=num_naive_runs)
             elif strategies[i] in naive_strategies:
                 std = master.static_std if 'Static' in strategies[i] else master.mobile_std
-                res = agents[i].run_naive(std=std, counts=[k]*num_naive_runs, metric='distance')
+                res = agents[i].run_naive(std=std, counts=[test_every]*num_naive_runs, metric='distance')
             else:
                 raise NotImplementedError
             error_results[i].append([zero_error] + res['error'])
             mi_results[i].append([zero_mi] + res['mi'])
             var_results[i].append([zero_mean_var] + res['mean_var'])
-
-    start = k
-    x = [initial_samples] + list(np.arange(start, start+k*num_naive_runs, k))
-    x = np.stack([x for _ in range(nsims)]).flatten()
+            sample_count[i].append(path_to_sample_count(env, agents[i].path)[:max_dist])
+    start = test_every
+    x = [initial_samples] + list(np.arange(start, start+test_every*num_naive_runs, test_every))
+    # x = np.stack([x for _ in range(nsims)]).flatten()
+    x = np.tile(x, nsims)
     xlabel = 'Distance travelled'
     ci = 50
     
@@ -87,7 +102,19 @@ def compare_all_strategies(args):
 
     ylabel = 'Test MAE'
     generate_lineplots(df_err, x='x', xlabel=xlabel, ylabel=ylabel, legends=strategies, ci=ci)
-    # ipdb.set_trace()
+    
+    # sample_count vs distance
+    all_sample_count = [np.stack(sc).flatten() for sc in sample_count]
+    dist = np.tile(np.arange(1, 1+max_dist), nsims)
+    dct_sc = {'x': dist}
+    for y, lbl in zip(all_sample_count, strategies):
+        dct_sc[lbl] = y
+    df_sc = pd.DataFrame.from_dict(dct_sc)
+    
+    ylabel_sc = 'Number of samples'
+    generate_lineplots(df_sc, x='x', xlabel=xlabel, ylabel=ylabel_sc, legends=strategies, ci=ci)
+
+    ipdb.set_trace()
 
     # There dataframes are not necessary to store 
     # test mean variance
@@ -114,15 +141,15 @@ def compare_all_strategies(args):
 def compare_maxent(args):
     nsims = 10
 
-    k = 10
+    test_every = 10
     num_naive_runs = 25
     disp = False
     # set some initial samples
     initial_samples = 5
     # noise_ratios = [1,2,5,10]
-    # variants = ['k = ' + str(n) for n in noise_ratios]
+    # variants = ['test_every = ' + str(n) for n in noise_ratios]
 
-    slacks = [0, 5, 10]
+    slacks = [0, 5, 10, 15]
     variants = ['slack = ' + str(s) for s in slacks]
     
     nv = len(variants)
@@ -145,13 +172,14 @@ def compare_maxent(args):
         
         for i in range(nv):
             res = agents[i].run_ipp(num_runs=args.num_runs, strategy='MaxEnt', disp=disp, slack=slacks[i])
-            res = agents[i].prediction_vs_distance(k=k, num_runs=num_naive_runs)
+            # res = agents[i].run_ipp(num_runs=args.num_runs, strategy='MaxEnt', disp=disp, slack=0)
+            res = agents[i].prediction_vs_distance(test_every=test_every, num_runs=num_naive_runs)
             error_results[i].append([zero_error] + res['error'])            
             mi_results[i].append([zero_mi] + res['mi'])
             var_results[i].append([zero_mean_var] + res['mean_var'])
 
-    start = k
-    x = [initial_samples] + list(np.arange(start, start+k*num_naive_runs, k))
+    start = test_every
+    x = [initial_samples] + list(np.arange(start, start+test_every*num_naive_runs, test_every))
     x = np.stack([x for _ in range(nsims)]).flatten()
     xlabel = 'Distance travelled'
     ci = 50
@@ -174,7 +202,7 @@ def compare_maxent(args):
     df_var = pd.DataFrame.from_dict(dct_var)
     ylabel_var = 'Test Mean Variance'
     generate_lineplots(df_var, x='x', xlabel=xlabel, ylabel=ylabel_var, legends=variants, ci=ci)
-    # ipdb.set_trace()
+    ipdb.set_trace()
 
 def run_demo(args):
     env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
@@ -188,13 +216,21 @@ def run_demo(args):
     # naive_strategies = ['Naive Static', 'Naive Mobile']
 
     agent.run_ipp(render=args.render, num_runs=args.num_runs, strategy='MaxEnt')
+    # agent.run_greedy_ipp(num_runs=args.num_runs, strategy='MaxEnt')
+
+
+def render_naive_strategy(args):
+    env = FieldEnv(data_file=args.data_file, phenotype=args.phenotype, num_test=args.num_test)
+    env.render_naive()
 
 
 if __name__ == '__main__':
     args = get_args()
-    pprint(vars(args))
-    run_demo(args)
-    # compare_all_strategies(args)
+    # render_naive_strategy(args)
+
+    # pprint(vars(args))
+    # run_demo(args)
+    compare_all_strategies(args)
     # compare_maxent(args)
 
 

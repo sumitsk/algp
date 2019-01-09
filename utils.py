@@ -4,7 +4,7 @@ import torch
 import pickle 
 import pandas as pd
 import seaborn as sns
-# import ipdb
+import ipdb
 
 
 CONST = .5*np.log(2*np.pi*np.exp(1))
@@ -79,6 +79,11 @@ def load_data_from_pickle(filename, target_feature, extra_input_features=[], max
         y = y[ind]
     else:
         max_range = num_ranges
+
+    # # mask out some plots
+    # retain_frac = .8
+    # retain = np.random.randint(0, len(x), int(retain_frac*len(x)))
+    # x, y = x[retain], y[retain]
     return max_range, num_rows, x, y 
 
 

@@ -1,7 +1,7 @@
 import numpy as np
 from utils import manhattan_distance
 from graph_utils import get_heading, opposite_headings
-# import ipdb
+import ipdb
 
 
 class Map(object):
@@ -17,7 +17,7 @@ class Map(object):
         assert self.num_gp_rows % (self.num_row_passes + 1) == 0, 'Infeasible row setting'
 
         self._shape = self._compute_map_dimensions()
-        self.stack_len = self.num_gp_rows // (self.num_row_passes + 1)
+        self.corridor_len = self.num_gp_rows // (self.num_row_passes + 1)
         self.row_pass_indices = self._get_row_pass_indices()
         self.free_cols = np.arange(0, self.shape[1], 2)
         self.obstacle_cols = np.arange(1, self.shape[1], 2)
@@ -50,7 +50,7 @@ class Map(object):
         while t < self.num_row_passes + 2:
             ind += list(range(last, last + self.row_pass_width))
             t += 1
-            last = last + self.row_pass_width + self.stack_len
+            last = last + self.row_pass_width + self.corridor_len
         return np.array(ind)
    
     def distance_between_nodes(self, start, goal, heading):
@@ -132,7 +132,7 @@ class Map(object):
             return dist
 
         # Goal heading is opposite of final_heading
-        perimeter = 4 + 2*(self.stack_len+1)
+        perimeter = 4 + 2*(self.corridor_len+1)
 
         if start_heading in [(1,0),(-1,0)]:
             start_junc = self.get_junction(start, start_heading)
@@ -187,7 +187,7 @@ class Map(object):
         down = min([x for x in self.row_pass_indices if x>=pose[0]])
         return (down, pose[1])
 
-    def nearest_waypoint_path_cost(self, start, start_heading, waypoints):
+    def nearest_waypoint_path_cost(self, start, start_heading, waypoints, return_seq=False):
         # return cost of the path formed by always moving to the nearest waypoint
         nw = len(waypoints)
         visited = [False]*nw
@@ -195,6 +195,11 @@ class Map(object):
 
         node = start
         heading = start_heading
+        if return_seq:
+            seq = []
+            costs = []
+            # final_headings = []
+
         while sum(visited) != nw:
             # find the nearest waypoint from the current node
             all_dists = [np.inf]*nw
@@ -211,4 +216,12 @@ class Map(object):
             node = waypoints[idx]
             heading = all_final_headings[idx]
             visited[idx] = True
+            if return_seq:
+                costs.append(all_dists[idx])
+                seq.append(idx)
+                # final_headings.append(heading)
+
+        if return_seq:
+            # return costs, seq, final_headings
+            return costs, seq
         return total_cost

@@ -6,7 +6,7 @@ from copy import deepcopy
 from models import GPR
 from graph_utils import get_heading
 from utils import entropy_from_cov, compute_mae, predictive_distribution, find_shortest_path, find_equi_sample_path
-# import ipdb
+import ipdb
 
 
 class Agent(object):
@@ -33,7 +33,8 @@ class Agent(object):
             
     def _init_model(self, args):
         kernel_params = {'type': args.kernel}
-        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params, learn_likelihood_noise=self.learn_likelihood_noise)
+        self.gp = GPR(latent=args.latent, lr=args.lr, max_iterations=args.max_iterations, kernel_params=kernel_params,
+                      learn_likelihood_noise=self.learn_likelihood_noise)
 
     def load_model(self, parent_agent):
         self.gp.reset(parent_agent.gp.train_x, parent_agent.gp.train_y, parent_agent.gp.train_var)
@@ -115,7 +116,7 @@ class Agent(object):
 
         return indices, np.array(all_y), np.array(all_var)
 
-    def _setup_ipp(self, criterion, update):
+    def _setup_ipp(self, criterion, update=False):
         self.criterion = criterion
         # if not update:
         #     self.reset()
@@ -183,7 +184,7 @@ class Agent(object):
             
             if render:
                 pred = self.predict(self.env.all_x).reshape(self.env.shape)
-                true = self.env.all_y.reshape(self.env.shape)
+                # true = self.env.all_y.reshape(self.env.shape)
                 # self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations, true, pred)
                 self.env.render(paths_checkpoints[best_idx], self.path, next_static_locations, self.static_locations)
 
@@ -226,6 +227,64 @@ class Agent(object):
         print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
         results = {'mean': pred, 'error':test_error}
         return results
+
+    def run_greedy_ipp(self, num_runs=10, criterion='entropy', strategy='MaxEnt', disp=True):
+        self._setup_ipp(criterion)
+        
+        for i in range(num_runs):
+            print(i)
+            if disp:
+                print('\n==================================================================================================')
+                print('Run {}/{}'.format(i+1, num_runs))
+            
+            run_start = time.time()
+            
+            # greedily select static samples
+            new_gp_indices = self.greedy(self.num_samples_per_batch)  
+            waypoints = [tuple(self.env.gp_index_to_map_pose(x)) for x in new_gp_indices]
+            next_static_locations = np.stack(waypoints)
+            self.static_locations = np.concatenate([self.static_locations, next_static_locations]).astype(int)
+
+            # Gather data along path 
+            if disp:      
+                print('------ Finding valid paths ---------')
+                print('Pose:',self.pose, 'Heading:', self.heading, 'Waypoints:', waypoints)
+
+            # move to the nearest waypoint
+            costs, seq = self.env.map.nearest_waypoint_path_cost(self.pose, self.heading, waypoints, return_seq=True)
+            for i in range(len(seq)):
+                paths_checkpoints, paths_indices, paths_cost = self.env.get_all_paths(self.pose, self.heading,
+                 [waypoints[seq[i]]], costs[i], slack=0)
+                assert costs[i]==paths_cost[0], 'path costs do not match'
+                
+                # find optimal path
+                if strategy == 'Shortest':
+                    best_idx = find_shortest_path(paths_cost)
+                else:
+                    best_idx = self.best_path(paths_indices, [new_gp_indices[seq[i]]])
+                    if strategy == 'Equi-Sample':
+                        best_idx = find_equi_sample_path(paths_indices, best_idx)
+                
+                next_path = np.stack(self.env.get_path_from_checkpoints(paths_checkpoints[best_idx]))[1:]
+                next_path_indices, stds = self.get_samples_sequence_from_path(next_path, waypoints)
+                self.path = np.concatenate([self.path, next_path], axis=0).astype(int)
+                self.pose = tuple(self.path[-1])
+                self.heading = get_heading(self.path[-2], self.path[-1])
+                                
+                # gather samples
+                self._add_samples(next_path_indices, stds)
+            
+            run_end = time.time()
+            if disp:
+                print('\nTotal Time consumed in run {}: {:.4f}'.format(i+1, run_end - run_start))
+
+        pred, var = self.predict(return_var=True)
+        error = compute_mae(self.env.test_Y, pred)
+        print('==========================================================')
+        print('Strategy: {:s}'.format(strategy))
+        print('--- Final statistics --- ')
+        print('Test ERROR: {:.4f}'.format(error))
+        print('Predictive Variance Max: {:.3f} Min: {:.3f} Mean: {:.3f}'.format(var.max(), var.min(), var.mean()))
 
     def predict(self, x=None, return_var=False, return_cov=False, return_mi=False):
         x = self.env.test_X if x is None else x
@@ -357,7 +416,7 @@ class Agent(object):
             c = 0
             done = False
             while not done:
-                # keep moving in the heading direction till you reach the end and need to shift to the next row
+                # keep moving in the heading direction till you reach the end and need to shift to the next array
                 next_pose = (self.pose[0]+self.heading[0], self.pose[1]+self.heading[1])
                 ind = self.env.map_pose_to_gp_index_matrix[next_pose]
                 if ind is not None:
@@ -435,14 +494,14 @@ class Agent(object):
                 std.append(-1)
         return indices, std
 
-    def prediction_vs_distance(self, k, num_runs):
+    def prediction_vs_distance(self, test_every, num_runs):
         count = 0
         all_error = []
         all_mi = []
         all_var = []
 
-        while count < k*num_runs:
-            count += k
+        while count < test_every*num_runs:
+            count += test_every
             inds = np.array(self.collected['ind'][:count])
             valid = inds!=-1
 

@@ -13,17 +13,19 @@ import ipdb
 
 
 class FieldEnv(object):
+    # grid-based simulation environment 
     def __init__(self, data_file=None, phenotype='plant_count', num_test=40):
         super(FieldEnv, self).__init__()
         if data_file is None:
-            self.num_rows = 25
-            self.num_cols = 15
+            self.num_rows = 30
+            self.num_cols = 30
             x, y, self.y_category = generate_phenotype_data(num_rows=self.num_rows, num_cols=self.num_cols, num_zs=4)
             x[:,1] *= 2
             self._setup(x, y, num_test)
             self._place_samples_others(row_start=0, row_inc=1)
 
         else:
+            # NOTE: will deprecate this soon
             # for intel dataset
             if 'intel' in data_file:
                 import scipy.io
@@ -38,7 +40,9 @@ class FieldEnv(object):
             # for sorghum dataset
             else: 
                 extra_features = ['leaf_fill', 'grvi']
-                self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype, max_range=25, 
+                max_range = 35
+                self.num_rows, self.num_cols, x, y = load_data_from_pickle(data_file, target_feature=phenotype,
+                                                                           max_range=max_range, 
                                                                            extra_input_features=extra_features)
                 self._setup(x, y, num_test)
                 self._place_samples_pheno()
@@ -52,7 +56,7 @@ class FieldEnv(object):
         self.ax = None
 
     def _setup(self, x, y, num_test):
-        # split dataset 
+        # split into training and testing data
         n = len(x)
         perm = np.random.permutation(n)
         test_ind = perm[:num_test]
@@ -63,12 +67,14 @@ class FieldEnv(object):
         self.test_X = x[test_ind]
         self.test_Y = y[test_ind]
 
-        # setup map
+        # setup map and pose-index and index-pose lookup tables
         self.map = Map(self.num_rows, self.num_cols, num_row_passes=4)
         self.map_pose_to_gp_index_matrix = np.full(self.map.shape, None)
         self.gp_index_to_map_pose_array = np.full(len(self.X), None)
 
+    # TODO: merge this with the next function
     def _place_samples_others(self, row_start=0, row_inc=1):
+        # assign samples to grid cells
         x = self.X[:,:2]
         indices = np.arange(len(x))
         row = row_start
@@ -83,6 +89,7 @@ class FieldEnv(object):
             row += row_inc
 
     def _place_samples_pheno(self):
+        # assign samples to grid cells
         row = 2
         row_inc = 2
         x = self.X[:,:2]
@@ -92,26 +99,28 @@ class FieldEnv(object):
                 continue
             row_indices = indices[x[:,0]==row]
             for ind in row_indices:
-                t = x[ind, 1] + (x[ind, 1] -1) // self.map.stack_len
+                t = x[ind, 1] + (x[ind, 1] -1) // self.map.corridor_len
                 map_pose = (int(t), row-2)
                 self.map_pose_to_gp_index_matrix[map_pose] = ind 
                 self.gp_index_to_map_pose_array[ind] = map_pose
             row += row_inc
             
     def collect_samples(self, indices, noise_std):
+        # draw measurement for the given sampling index and noise
         y = self.Y[indices] + np.random.normal(0, noise_std)
         # truncating negative values to 0
         y = max(0,y)
         return y
 
     def _setup_graph(self):
+        # initialize graph for path planning
         self.graph = nx.Graph()
         # add all intersections as nodes
         for r in self.map.row_pass_indices:
             for c in self.map.free_cols:
                 self.graph.add_node((r,c), pose=(c,self.map.shape[0]-r), new='False')
 
-        delta_x = self.map.stack_len + 1
+        delta_x = self.map.corridor_len + 1
         # x-axis is row or the first element of the tuple
         dx_dy = [(0,2), (0,-2), (delta_x, 0), (-delta_x, 0)]
 
@@ -123,11 +132,11 @@ class FieldEnv(object):
                     indices = self.gp_indices_between(node, neighbor)
                     self.graph.add_edge(node, neighbor, indices=indices)
 
-        # store a backup
+        # store a backup graph (or restore point)
         self.backup_graph = deepcopy(self.graph)
 
     def _pre_search(self, start, waypoints):
-        # add start and waypoints to the graph and remove redundant ones
+        # nodes and edges to be added to the graph and the edges to be removed from the graph
         new_nodes, new_edges, new_edges_indices, remove_edges = self.get_new_nodes_and_edges([start] + waypoints)
         
         # add start and waypoint nodes to the graph
@@ -141,7 +150,7 @@ class FieldEnv(object):
         # remove redundant edges (these edges have been replaced by edges between waypoints and map junctions)
         self.graph.remove_edges_from(remove_edges)  
 
-        # for drawing graph
+        # draw graph
         # colors = []
         # for n in self.graph:
         #     if self.graph.node[n]['new'] == 'False':
@@ -154,10 +163,14 @@ class FieldEnv(object):
         
     def get_new_nodes_and_edges(self, new_nodes):
         # return nodes and edges to be added to the graph and the edges to be removed from the graph
+        
+        # nodes not present in the graph already
         new_nodes = [n for n in new_nodes if n not in self.graph.nodes()]
         new_edges = []
         new_edges_indices = []
         remove_edges = []
+
+        # for each node find edges to be added and to be removed from the graph
         for node in new_nodes:
             down_junc = self.map.get_down_junction(node)
             up_junc = self.map.get_up_junction(node)
@@ -296,7 +309,7 @@ class FieldEnv(object):
         self._post_search()
         return all_paths, all_paths_indices, all_paths_cost
 
-    def get_heuristic_cost(self, start, heading, waypoints, least_cost_ub=None):
+    def get_heuristic_cost(self, start, heading, waypoints, least_cost_ub=None, return_seq=False):
         if len(waypoints) == 0:
             return 0
 
@@ -359,15 +372,17 @@ class FieldEnv(object):
                 if sum(new_visited) == nw:
                     if new_gval <= least_cost:
                         least_cost = new_gval
-                        # best_idx = idx
+                        best_idx = idx
 
                     closed_list.append(idx)
                 else:
                     open_list.append(idx)
-        # ipdb.set_trace()
+        if return_seq:
+            ipdb.set_trace()
         return least_cost
 
     def gp_indices_on_path(self, path):
+        # all gp indices lying on the path
         gp_indices = [self.graph.get_edge_data(path[t], path[t+1])['indices'] for t in range(len(path) - 1)]
         gp_indices = [item for sublist in gp_indices for item in sublist]        
         return gp_indices
@@ -472,19 +487,7 @@ class FieldEnv(object):
         else:
             num_axes = 1
 
-        if self.fig is None:
-            plt.ion()
-            self.fig, self.ax = plt.subplots(ncols=num_axes, figsize=(4*num_axes, 4))
-            self.ax = [self.ax] if num_axes==1 else self.ax.flatten()
-            # clear all ticks
-            for ax_ in self.ax:
-                ax_.get_xaxis().set_visible(False)
-                ax_.get_yaxis().set_visible(False)
-            ipdb.set_trace()
-        else:
-            # clear all axes
-            for ax_ in self.ax:
-                ax_.cla()
+        self._setup_render(num_axes=num_axes)
 
         self.render_map(self.ax[0], next_path_waypoints, all_paths, next_static_locations, all_static_locations)
         if num_axes == 3:
@@ -498,3 +501,38 @@ class FieldEnv(object):
             sns.heatmap(pred, ax=self.ax[1], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False, square=True)
             sns.heatmap(true, ax=self.ax[2], cmap='ocean', vmin=vmin, vmax=vmax, cbar=False, square=True)
         plt.pause(1)
+
+    def _setup_render(self, num_axes):
+        if self.fig is None:
+            plt.ion()
+            self.fig, self.ax = plt.subplots(ncols=num_axes, figsize=(4*num_axes, 4))
+            self.ax = [self.ax] if num_axes==1 else self.ax.flatten()
+            # clear all ticks
+            for ax_ in self.ax:
+                ax_.get_xaxis().set_visible(False)
+                ax_.get_yaxis().set_visible(False)
+        else:
+            # clear all axes
+            for ax_ in self.ax:
+                ax_.cla()
+
+    def render_naive(self):
+        num_axes = 1
+        self._setup_render(num_axes)
+
+        # waypoints
+        first_array = [(i,0) for i in range(self.map.shape[0])]
+        second_array = [(i,2) for i in reversed(range(self.map.shape[0]))]
+        third_array = [(i,4) for i in range(self.map.shape[0])]
+        
+
+        all_paths = []
+        next_path_waypoints = first_array + [(self.map.shape[0]-1,1)] + second_array + [(0,3)] + third_array
+        next_static_locations = []
+        all_static_locations = []
+        self.render_map(self.ax[0], next_path_waypoints, all_paths, next_static_locations, all_static_locations)
+        plt.pause(1)
+        ipdb.set_trace()
+
+
+
