@@ -1,6 +1,8 @@
 # Active Learning with Gaussian Processes for Crop Phenotyping
 Plant phenotyping evaluates crops based on physical characteristics to support plant breeding and genetics activities. Since the current standard practice in collecting phenotype data needs human specialists to assess thousands of plants, phenotyping is currently the bottleneck in the plant breeding process. To increase efficiency of phenotyping, high throughput phenotyping (HTP) uses sensors and robotic platforms to gather plant phenotype data. However, the current practices involve exhaustive data collection and is time-consuming. In this project, we develop an active learning algorithm with Gaussian Processes to enable a robotic system to actively gather measurements from the field in order to learn the phenotype distribution. 
 
+The paper can be found at https://arxiv.org/abs/1901.06803 and will appear at [AAMAS 2019](http://aamas2019.encs.concordia.ca/).
+
 ## Installation
 
 ### Requirements: 
