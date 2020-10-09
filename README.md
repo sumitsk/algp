@@ -29,7 +29,7 @@ Here is an example simulation video:
 
 ## Contact
 
-For any queries, feel free to raise an issue or contact me at sumitsk@cmu.edu.
+For any queries, feel free to raise an issue or contact me at sumit.sks4@gmail.com.
 
 <!-- <img width="100" src=https://www.cmu.edu/marcom/brand-standards/images/logos-colors-type/full-color-seal-min.png /> -->
 ![](imgs/cmu_logo2.png)
